@@ -1,0 +1,13 @@
+.cache
+.vscode
+.vs
+/bin/
+/_build_/
+lib/*
+exercise4/shaders/bin
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+*.make
+*.sln
+*.spv
