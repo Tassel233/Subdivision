@@ -49,6 +49,7 @@ namespace
 		constexpr char const* kFragShaderPath = SHADERDIR_ "shader3d.frag.spv";
 #		undef SHADERDIR_
 		constexpr char const* modelPath = MODELDIR_ "scene.gltf";
+		constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
 
 
@@ -95,10 +96,14 @@ namespace
 	lut::PipelineLayout create_pipeline_layout( lut::VulkanContext const&, VkDescriptorSetLayout );
 	lut::Pipeline create_pipeline( lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout );
 
-	void create_swapchain_framebuffers( 
-		lut::VulkanWindow const&, 
+	std::tuple<lut::Image, lut::ImageView> create_depth_buffer(lut::VulkanWindow const&, lut::Allocator const&);
+
+
+	void create_swapchain_framebuffers(
+		lut::VulkanWindow const&,
 		VkRenderPass,
-		std::vector<lut::Framebuffer>&
+		std::vector<lut::Framebuffer>&,
+		VkImageView aDepthView
 	);
 
 	void update_scene_uniforms(
@@ -142,7 +147,7 @@ namespace
 
 int main() try
 {
-	lut::GltfModel model;
+	labutils::GltfModel model;
 	if (model.loadFromFile(cfg::modelPath))
 	{
 		std::cout << "load successfully!" << std::endl;
@@ -173,8 +178,10 @@ int main() try
 	lut::PipelineLayout pipeLayout = create_pipeline_layout( window, sceneLayout.handle);
 	lut::Pipeline pipe = create_pipeline( window, renderPass.handle, pipeLayout.handle );
 
+	auto [depthBuffer, depthBufferView] = create_depth_buffer(window, allocator);
+
 	std::vector<lut::Framebuffer> framebuffers;
-	create_swapchain_framebuffers( window, renderPass.handle, framebuffers );
+	create_swapchain_framebuffers(window, renderPass.handle, framebuffers, depthBufferView.handle);
 
 	lut::CommandPool cpool = lut::create_command_pool( window, VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT );
 
@@ -267,11 +274,16 @@ int main() try
 			if (changes.changedFormat)
 				renderPass = create_render_pass(window);
 
-			framebuffers.clear();
-			create_swapchain_framebuffers(window, renderPass.handle, framebuffers);
-
 			if (changes.changedSize)
+			{
+				std::tie(depthBuffer, depthBufferView) = create_depth_buffer(window, allocator);
 				pipe = create_pipeline(window, renderPass.handle, pipeLayout.handle);
+				//alpha_pipe = create_alpha_pipeline(window, renderPass.handle, pipeLayout.handle);
+			}
+
+			framebuffers.clear();
+			create_swapchain_framebuffers(window, renderPass.handle, framebuffers, depthBufferView.handle);
+
 			recreateSwapchain = false;
 		}
 
@@ -435,29 +447,45 @@ namespace
 
 namespace
 {
-	lut::RenderPass create_render_pass( lut::VulkanWindow const& aWindow )
+	lut::RenderPass create_render_pass(lut::VulkanWindow const& aWindow)
 	{
-		VkAttachmentDescription attachments[1]{};
-		attachments[0].format = aWindow.swapchainFormat;  // changed!
+		VkAttachmentDescription attachments[2]{};
+		attachments[0].format = aWindow.swapchainFormat;
 		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
 		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // changed!
+		attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+		attachments[1].format = cfg::kDepthFormat;
+		attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+		attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
 
 		VkAttachmentReference subpassAttachments[1]{};
 		subpassAttachments[0].attachment = 0; // this refers to attachments[0]
 		subpassAttachments[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+		// New:
+		VkAttachmentReference depthAttachment{};
+		depthAttachment.attachment = 1; // this refers to attachments[1]
+		depthAttachment.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
 		VkSubpassDescription subpasses[1]{};
 		subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpasses[0].colorAttachmentCount = 1;
 		subpasses[0].pColorAttachments = subpassAttachments;
+		// New line for depth attachment
+		subpasses[0].pDepthStencilAttachment = &depthAttachment;
+
 
 		// Requires a subpass dependency to ensure that the first transition happens after the presentation engine is done with it.
 		// https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples-(Legacy-synchronization-APIs)#combined-graphicspresent-queue
 		// WARNING: The following has changed! Make sure to update it!
-		VkSubpassDependency deps[1]{};
+		VkSubpassDependency deps[2]{};
 		deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 		deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
 		deps[0].srcAccessMask = 0;
@@ -466,14 +494,23 @@ namespace
 		deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 		deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
+		deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+		deps[1].srcSubpass = VK_SUBPASS_EXTERNAL;
+		deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		deps[1].dstSubpass = 0;
+		deps[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+		deps[1].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+
+
 		// https://www.khronos.org/registry/vulkan/specs/1.2-extensions/man/html/VkRenderPassCreateInfo.html
 		VkRenderPassCreateInfo passInfo{};
 		passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		passInfo.attachmentCount = 1;
+		passInfo.attachmentCount = 2;
 		passInfo.pAttachments = attachments;
 		passInfo.subpassCount = 1;
 		passInfo.pSubpasses = subpasses;
-		passInfo.dependencyCount = 1; // different dependency, same code
+		passInfo.dependencyCount = 2; // different dependency, same code
 		passInfo.pDependencies = deps; // different dependency, same code
 
 		VkRenderPass rpass = VK_NULL_HANDLE;
@@ -544,7 +581,7 @@ namespace
 		vertexInputs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
 		vertexInputs[1].binding = 1;
-		vertexInputs[1].stride = sizeof(float) * 3;
+		vertexInputs[1].stride = sizeof(float) * 2;
 		vertexInputs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
 		VkVertexInputAttributeDescription vertexAttributes[2]{};
@@ -555,10 +592,10 @@ namespace
 		vertexAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		vertexAttributes[0].offset = 0;
 
-		// Color attribute
+		// Texture attribute
 		vertexAttributes[1].binding = 1; // must match binding above
 		vertexAttributes[1].location = 1; // must match shader
-		vertexAttributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+		vertexAttributes[1].format = VK_FORMAT_R32G32_SFLOAT;
 		vertexAttributes[1].offset = 0;
 
 
@@ -628,6 +665,15 @@ namespace
 		blendInfo.attachmentCount = 1;
 		blendInfo.pAttachments = blendStates;
 
+		VkPipelineDepthStencilStateCreateInfo depthInfo{};
+		depthInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depthInfo.depthTestEnable = VK_TRUE;
+		depthInfo.depthWriteEnable = VK_TRUE;
+		depthInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+		depthInfo.minDepthBounds = 0.f;
+		depthInfo.maxDepthBounds = 1.f;
+
+
 		// Create pipeline
 		// finally!
 		VkGraphicsPipelineCreateInfo pipeInfo{};
@@ -645,6 +691,7 @@ namespace
 		pipeInfo.pDepthStencilState = nullptr; // no depth or stencil buffers
 		pipeInfo.pColorBlendState = &blendInfo;
 		pipeInfo.pDynamicState = nullptr; // no dynamic states
+		pipeInfo.pDepthStencilState = &depthInfo;
 
 		pipeInfo.layout = aPipelineLayout;
 		pipeInfo.renderPass = aRenderPass;
@@ -661,19 +708,27 @@ namespace
 		return lut::Pipeline(aWindow.device, pipe);
 	}
 
-	void create_swapchain_framebuffers(lut::VulkanWindow const& aWindow, VkRenderPass aRenderPass, std::vector<lut::Framebuffer>& aFramebuffers)
+	void create_swapchain_framebuffers(
+		lut::VulkanWindow const& aWindow,
+		VkRenderPass aRenderPass,
+		std::vector<lut::Framebuffer>& aFramebuffers,
+		VkImageView aDepthView
+	)
 	{
+		assert(aFramebuffers.empty());
+
 		for (std::size_t i = 0; i < aWindow.swapViews.size(); ++i)
 		{
-			VkImageView attachments[1] = {
-				aWindow.swapViews[i]
+			VkImageView attachments[2] = {
+				aWindow.swapViews[i],
+				aDepthView
 			};
 
 			VkFramebufferCreateInfo fbInfo{};
 			fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 			fbInfo.flags = 0; // normal framebuffer
 			fbInfo.renderPass = aRenderPass;
-			fbInfo.attachmentCount = 1;
+			fbInfo.attachmentCount = 2;
 			fbInfo.pAttachments = attachments;
 			fbInfo.width = aWindow.swapchainExtent.width;
 			fbInfo.height = aWindow.swapchainExtent.height;
@@ -784,11 +839,14 @@ namespace
 
 
 		// Begin render pass
-		VkClearValue clearValues[1]{};
+		VkClearValue clearValues[2]{};
 		clearValues[0].color.float32[0] = 0.1f; // Clear to a dark gray background.
 		clearValues[0].color.float32[1] = 0.1f; // Helps identify render pass visually
 		clearValues[0].color.float32[2] = 0.1f;
 		clearValues[0].color.float32[3] = 1.0f;
+
+		clearValues[1].depthStencil.depth = 1.f; // new!
+
 
 		VkRenderPassBeginInfo passInfo{};
 		passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -796,7 +854,7 @@ namespace
 		passInfo.framebuffer = aFramebuffer;
 		passInfo.renderArea.offset = VkOffset2D{ 0, 0 };
 		passInfo.renderArea.extent = VkExtent2D{ aImageExtent.width, aImageExtent.height };
-		passInfo.clearValueCount = 1;
+		passInfo.clearValueCount = 2;
 		passInfo.pClearValues = clearValues;
 
 		vkCmdBeginRenderPass(aCmdBuff, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -884,6 +942,62 @@ namespace
 		}
 
 	}
+
+	std::tuple<lut::Image, lut::ImageView> create_depth_buffer(lut::VulkanWindow const& aWindow, lut::Allocator const& aAllocator)
+	{
+		VkImageCreateInfo imageInfo{};
+		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.format = cfg::kDepthFormat;
+		imageInfo.extent.width = aWindow.swapchainExtent.width;
+		imageInfo.extent.height = aWindow.swapchainExtent.height;
+		imageInfo.extent.depth = 1;
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+		VmaAllocationCreateInfo allocInfo{};
+		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+		VkImage image = VK_NULL_HANDLE;
+		VmaAllocation allocation = VK_NULL_HANDLE;
+
+		if (auto const res = vmaCreateImage(aAllocator.allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr); VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to allocate depth buffer image.\n"
+				"vmaCreateImage() returned %s", lut::to_string(res).c_str());
+		}
+
+		lut::Image depthImage(aAllocator.allocator, image, allocation);
+
+		// Create the image view
+		VkImageViewCreateInfo viewInfo{};
+		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		viewInfo.image = depthImage.image;
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		viewInfo.format = cfg::kDepthFormat;
+		viewInfo.components = VkComponentMapping{};
+		viewInfo.subresourceRange = VkImageSubresourceRange{
+			VK_IMAGE_ASPECT_DEPTH_BIT,
+			0, 1,
+			0, 1
+		};
+
+		VkImageView view = VK_NULL_HANDLE;
+		if (auto const res = vkCreateImageView(aWindow.device, &viewInfo, nullptr, &view); VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to create image view\n"
+				"vkCreateImageView() returned %s", lut::to_string(res).c_str());
+		}
+
+		return { std::move(depthImage), lut::ImageView(aWindow.device, view) };
+
+	}
+
 }
 
 //EOF vim:syntax=cpp:foldmethod=marker:ts=4:noexpandtab: 
