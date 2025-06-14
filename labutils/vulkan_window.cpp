@@ -200,7 +200,7 @@ namespace labutils
 		// Create GLFW Window and the Vulkan surface
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-		ret.window = glfwCreateWindow(1280, 720, "Exercise 3", nullptr, nullptr);
+		ret.window = glfwCreateWindow(1280, 720, "renderer", nullptr, nullptr);
 		if (!ret.window)
 		{
 			char const* errMsg = nullptr;
@@ -461,10 +461,23 @@ namespace
 		VkExtent2D extent = caps.currentExtent;
 		if (std::numeric_limits<std::uint32_t>::max() == extent.width)
 		{
-			int width, height;
-			glfwGetFramebufferSize(aWindow, &width, &height);
+			//int width, height;
+			//glfwGetFramebufferSize(aWindow, &width, &height);
 
-			// Note: we must ensure that the extent is within the range defined by [minImageExtent, maxImageExtent]
+			//// Note: we must ensure that the extent is within the range defined by [minImageExtent, maxImageExtent]
+			//auto const& min = caps.minImageExtent;
+			//auto const& max = caps.maxImageExtent;
+
+			//extent.width = std::clamp(std::uint32_t(width), min.width, max.width);
+			//extent.height = std::clamp(std::uint32_t(height), min.height, max.height);
+			int width = 0, height = 0;
+
+			// Wait until window is not minimized
+			do {
+				glfwGetFramebufferSize(aWindow, &width, &height);
+				glfwWaitEvents(); // Avoid busy-waiting
+			} while (width == 0 || height == 0);
+
 			auto const& min = caps.minImageExtent;
 			auto const& max = caps.maxImageExtent;
 

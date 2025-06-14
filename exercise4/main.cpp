@@ -1,4 +1,5 @@
 #include <iostream>
+#include <chrono>
 #include <volk/volk.h>
 
 #include <tuple>
@@ -39,6 +40,8 @@ namespace lut = labutils;
 
 namespace
 {
+	using Clock_ = std::chrono::steady_clock;
+	using Secondsf_ = std::chrono::duration<float, std::ratio<1>>;
 	namespace cfg
 	{
 		// Compiled shader code for the graphics pipeline
@@ -46,7 +49,11 @@ namespace
 #		define MODELDIR_ "assets/exercise4/"
 #		define SHADERDIR_ "assets/exercise4/shaders/"
 		constexpr char const* kVertShaderPath = SHADERDIR_ "shader3d.vert.spv";
+		constexpr char const* kVertModelPath = SHADERDIR_ "shadermodel.vert.spv";
 		constexpr char const* kFragShaderPath = SHADERDIR_ "shader3d.frag.spv";
+		constexpr char const* kFragModelPath = SHADERDIR_ "shadermodel.frag.spv";
+
+
 #		undef SHADERDIR_
 		constexpr char const* modelPath = MODELDIR_ "scene.gltf";
 		constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
@@ -62,10 +69,47 @@ namespace
 		constexpr float kCameraFar   = 100.f;
 
 		constexpr auto kCameraFov    = 60.0_degf;
-	}
 
+		// General rule: for debugging, you want to be able to move around quickly in the scene (but slow down if ecessary).
+		// The exact settings here depend on the scene scale and similar settings.
+		constexpr float kCameraBaseSpeed = 1.7f; // units/second
+		constexpr float kCameraFastMult = 5.f; // speed multiplier
+		constexpr float kCameraSlowMult = 0.05f; // speed multiplier
+		constexpr float kCameraMouseSensitivity = 0.01f; // radians per pixel
+	}
 	// GLFW callbacks
-	void glfw_callback_key_press( GLFWwindow*, int, int, int, int );
+	void glfw_callback_key_press(GLFWwindow*, int, int, int, int);
+	void glfw_callback_button(GLFWwindow*, int, int, int);
+	// receive mouse position
+	void glfw_callback_motion(GLFWwindow*, double, double);
+	enum class EInputState
+	{
+		forward,
+		backward,
+		strafeLeft,
+		strafeRight,
+		levitate,
+		sink,
+		fast,
+		slow,
+		mousing,
+		max,
+	};
+
+	struct UserState
+	{
+		bool inputMap[std::size_t(EInputState::max)] = {};
+
+		float mouseX = 0.0f, mouseY = 0.0f;
+		float previousX = 0.0f, previousY = 0.0f;
+
+		bool wasMousing = false;
+
+		glm::mat4 camera2world = glm::identity<glm::mat4>();
+	};
+
+	// update state based on elapsed time
+	void update_user_state(UserState&, float aElapsedTime);
 
 	// Uniform data
 	namespace glsl
@@ -95,6 +139,8 @@ namespace
 
 	lut::PipelineLayout create_pipeline_layout( lut::VulkanContext const&, VkDescriptorSetLayout );
 	lut::Pipeline create_pipeline( lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout );
+	lut::Pipeline create_model_pipeline(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
+
 
 	std::tuple<lut::Image, lut::ImageView> create_depth_buffer(lut::VulkanWindow const&, lut::Allocator const&);
 
@@ -109,7 +155,8 @@ namespace
 	void update_scene_uniforms(
 		glsl::SceneUniform&,
 		std::uint32_t aFramebufferWidth,
-		std::uint32_t aFramebufferHeight
+		std::uint32_t aFramebufferHeight,
+		UserState&
 	);
 
 
@@ -127,6 +174,22 @@ namespace
 		VkPipelineLayout,
 		VkDescriptorSet aSceneDescriptors
 	);
+
+	void record_commands1(
+		VkCommandBuffer,
+		VkRenderPass,
+		VkFramebuffer,
+		VkPipeline,
+		VkExtent2D const&,
+		VkBuffer aPositionBuffer,
+		VkBuffer aIndexBuffer,
+		std::uint32_t aIndicesCount,
+		VkBuffer aSceneUBO,
+		glsl::SceneUniform const&,
+		VkPipelineLayout,
+		VkDescriptorSet aSceneDescriptors
+	);
+
 
 	void submit_commands(
 		lut::VulkanWindow const&,
@@ -151,7 +214,7 @@ int main() try
 	if (model.loadFromFile(cfg::modelPath))
 	{
 		std::cout << "load successfully!" << std::endl;
-		//uploadMesh(model.vertices(), model.indices());  // ÄãµÄ Vulkan ÉÏ´«Âß¼­
+		//uploadMesh(model.vertices(), model.indices());
 	}
 	else
 	{
@@ -163,7 +226,16 @@ int main() try
 	auto window = lut::make_vulkan_window();
 
 	// Configure the GLFW window
-	glfwSetKeyCallback( window.window, &glfw_callback_key_press );
+	//glfwSetKeyCallback( window.window, &glfw_callback_key_press );
+
+	// Configure the GLFW window
+	UserState state{};
+	glfwSetWindowUserPointer(window.window, &state);
+
+	glfwSetKeyCallback(window.window, &glfw_callback_key_press);
+	glfwSetMouseButtonCallback(window.window, &glfw_callback_button);
+	glfwSetCursorPosCallback(window.window, &glfw_callback_motion);
+
 
 	// Create VMA allocator
 	lut::Allocator allocator = lut::create_allocator( window );
@@ -176,7 +248,9 @@ int main() try
 
 
 	lut::PipelineLayout pipeLayout = create_pipeline_layout( window, sceneLayout.handle);
-	lut::Pipeline pipe = create_pipeline( window, renderPass.handle, pipeLayout.handle );
+	//lut::Pipeline pipe = create_pipeline( window, renderPass.handle, pipeLayout.handle );
+	lut::Pipeline pipe = create_model_pipeline( window, renderPass.handle, pipeLayout.handle);
+
 
 	auto [depthBuffer, depthBufferView] = create_depth_buffer(window, allocator);
 
@@ -199,7 +273,8 @@ int main() try
 	}
 
 	// Load data
-	ColorizedMesh planeMesh = create_plane_mesh( window, allocator );
+	//ColorizedMesh planeMesh = create_plane_mesh( window, allocator );
+	ModelMesh modelMesh= create_model_mesh(window, allocator, model);
 
 	// Create scene uniform buffer with lut::create_buffer()
 	lut::Buffer sceneUBO = lut::create_buffer(
@@ -246,6 +321,9 @@ int main() try
 	//TODO- (Section 4) create default texture sampler
 	//TODO- (Section 4) allocate and initialize descriptor sets for texture
 
+	//record current time
+	auto previousClock = Clock_::now();
+
 	// Application main loop
 	bool recreateSwapchain = false;
 
@@ -277,7 +355,8 @@ int main() try
 			if (changes.changedSize)
 			{
 				std::tie(depthBuffer, depthBufferView) = create_depth_buffer(window, allocator);
-				pipe = create_pipeline(window, renderPass.handle, pipeLayout.handle);
+				//pipe = create_pipeline(window, renderPass.handle, pipeLayout.handle);
+				pipe = create_model_pipeline(window, renderPass.handle, pipeLayout.handle);
 				//alpha_pipe = create_alpha_pipeline(window, renderPass.handle, pipeLayout.handle);
 			}
 
@@ -355,25 +434,44 @@ int main() try
 		assert(std::size_t(frameIndex) < cbuffers.size());
 		assert(std::size_t(imageIndex) < framebuffers.size());
 
+		// Update state
+		auto const now = Clock_::now();
+		auto const dt = std::chrono::duration_cast<Secondsf_>(now - previousClock).count();
+		previousClock = now;
+
+		update_user_state(state, dt);
+
 		// Prepare data for this frame
 		glsl::SceneUniform sceneUniforms{};
-		update_scene_uniforms(
-			sceneUniforms,
-			window.swapchainExtent.width,
-			window.swapchainExtent.height
-		);
+		update_scene_uniforms(sceneUniforms, window.swapchainExtent.width, window.swapchainExtent.height, state);
+
 
 
 		// Record and submit commands for this frame
-		record_commands(
+		//record_commands(
+		//	cbuffers[frameIndex],
+		//	renderPass.handle,
+		//	framebuffers[imageIndex].handle,
+		//	pipe.handle,
+		//	window.swapchainExtent,
+		//	planeMesh.positions.buffer,
+		//	planeMesh.colors.buffer,
+		//	planeMesh.vertexCount,
+		//	sceneUBO.buffer,
+		//	sceneUniforms,
+		//	pipeLayout.handle,
+		//	sceneDescriptors
+		//);
+
+		record_commands1(
 			cbuffers[frameIndex],
 			renderPass.handle,
 			framebuffers[imageIndex].handle,
 			pipe.handle,
 			window.swapchainExtent,
-			planeMesh.positions.buffer,
-			planeMesh.colors.buffer,
-			planeMesh.vertexCount,
+			modelMesh.posBuffer.buffer,
+			modelMesh.indexBuffer.buffer,
+			modelMesh.indicesCount,
 			sceneUBO.buffer,
 			sceneUniforms,
 			pipeLayout.handle,
@@ -417,16 +515,84 @@ namespace
 {
 	void glfw_callback_key_press( GLFWwindow* aWindow, int aKey, int /*aScanCode*/, int aAction, int /*aModifierFlags*/ )
 	{
-		if( GLFW_KEY_ESCAPE == aKey && GLFW_PRESS == aAction )
+		if (GLFW_KEY_ESCAPE == aKey && GLFW_PRESS == aAction)
 		{
-			glfwSetWindowShouldClose( aWindow, GLFW_TRUE );
+			glfwSetWindowShouldClose(aWindow, GLFW_TRUE);
+		}
+
+		auto state = static_cast<UserState*>(glfwGetWindowUserPointer(aWindow));
+		assert(state);
+
+		bool const isReleased = (GLFW_RELEASE == aAction);
+
+		switch (aKey)
+		{
+		case GLFW_KEY_W:
+			state->inputMap[std::size_t(EInputState::forward)] = !isReleased;
+			break;
+		case GLFW_KEY_S:
+			state->inputMap[std::size_t(EInputState::backward)] = !isReleased;
+			break;
+		case GLFW_KEY_A:
+			state->inputMap[std::size_t(EInputState::strafeLeft)] = !isReleased;
+			break;
+		case GLFW_KEY_D:
+			state->inputMap[std::size_t(EInputState::strafeRight)] = !isReleased;
+			break;
+		case GLFW_KEY_E:
+			state->inputMap[std::size_t(EInputState::levitate)] = !isReleased;
+			break;
+		case GLFW_KEY_Q:
+			state->inputMap[std::size_t(EInputState::sink)] = !isReleased;
+			break;
+
+		case GLFW_KEY_LEFT_SHIFT: [[fallthrough]];
+		case GLFW_KEY_RIGHT_SHIFT:
+			state->inputMap[std::size_t(EInputState::fast)] = !isReleased;
+			break;
+
+		case GLFW_KEY_LEFT_CONTROL: [[fallthrough]];
+		case GLFW_KEY_RIGHT_CONTROL:
+			state->inputMap[std::size_t(EInputState::slow)] = !isReleased;
+			break;
+
+		default:;
+		}
+
+	}
+
+	void glfw_callback_button(GLFWwindow* aWin, int aBut, int aAct, int)
+	{
+		auto state = static_cast<UserState*>(glfwGetWindowUserPointer(aWin));
+		assert(state);
+
+		if (GLFW_MOUSE_BUTTON_RIGHT == aBut && GLFW_PRESS == aAct)
+		{
+			auto& flag = state->inputMap[std::size_t(EInputState::mousing)];
+
+			flag = !flag;
+			if (flag)
+				glfwSetInputMode(aWin, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+			else
+				glfwSetInputMode(aWin, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 		}
 	}
+
+	void glfw_callback_motion(GLFWwindow* aWin, double aX, double aY)
+	{
+		auto state = static_cast<UserState*>(glfwGetWindowUserPointer(aWin));
+		assert(state);
+
+		state->mouseX = float(aX);
+		state->mouseY = float(aY);
+	}
+
+
 }
 
 namespace
 {
-	void update_scene_uniforms( glsl::SceneUniform& aSceneUniforms, std::uint32_t aFramebufferWidth, std::uint32_t aFramebufferHeight )
+	void update_scene_uniforms(glsl::SceneUniform& aSceneUniforms, std::uint32_t aFramebufferWidth, std::uint32_t aFramebufferHeight, UserState& aState)
 	{
 		float const aspect = aFramebufferWidth / float(aFramebufferHeight);
 
@@ -438,11 +604,58 @@ namespace
 		);
 		aSceneUniforms.projection[1][1] *= -1.f; // mirror Y axis
 
-		aSceneUniforms.camera = glm::translate(glm::vec3(0.f, -0.3f, -1.f));
+		aSceneUniforms.camera = glm::inverse(aState.camera2world);
 
 		aSceneUniforms.projCam = aSceneUniforms.projection * aSceneUniforms.camera;
-
 	}
+
+	void update_user_state(UserState& aState, float aElapsedTime)
+	{
+		auto& cam = aState.camera2world;
+
+		if (aState.inputMap[std::size_t(EInputState::mousing)])
+		{
+			// Only update the rotation on the second frame of mouse navigation.
+			// This ensures that the previousX and Y variables are initialized to sensible values.
+			if (aState.wasMousing)
+			{
+				auto const sens = cfg::kCameraMouseSensitivity;
+				auto const dx = sens * (aState.mouseX - aState.previousX);
+				auto const dy = sens * (aState.mouseY - aState.previousY);
+
+				cam = cam * glm::rotate(-dy, glm::vec3(1.0f, 0.0f, 0.0f));
+				cam = cam * glm::rotate(-dx, glm::vec3(0.0f, 1.0f, 0.0f));
+			}
+
+			aState.previousX = aState.mouseX;
+			aState.previousY = aState.mouseY;
+			aState.wasMousing = true;
+		}
+		else
+		{
+			aState.wasMousing = false;
+		}
+
+		auto const move = aElapsedTime * cfg::kCameraBaseSpeed *
+			(aState.inputMap[std::size_t(EInputState::fast)] ? cfg::kCameraFastMult : 1.0f) *
+			(aState.inputMap[std::size_t(EInputState::slow)] ? cfg::kCameraSlowMult : 1.0f);
+
+		if (aState.inputMap[std::size_t(EInputState::forward)])
+			cam = cam * glm::translate(glm::vec3(0.0f, 0.0f, -move));
+		if (aState.inputMap[std::size_t(EInputState::backward)])
+			cam = cam * glm::translate(glm::vec3(0.0f, 0.0f, move));
+
+		if (aState.inputMap[std::size_t(EInputState::strafeLeft)])
+			cam = cam * glm::translate(glm::vec3(-move, 0.0f, 0.0f));
+		if (aState.inputMap[std::size_t(EInputState::strafeRight)])
+			cam = cam * glm::translate(glm::vec3(move, 0.0f, 0.0f));
+
+		if (aState.inputMap[std::size_t(EInputState::levitate)])
+			cam = cam * glm::translate(glm::vec3(0.0f, move, 0.0f));
+		if (aState.inputMap[std::size_t(EInputState::sink)])
+			cam = cam * glm::translate(glm::vec3(0.0f, -move, 0.0f));
+	}
+
 }
 
 namespace
@@ -575,8 +788,9 @@ namespace
 
 		VkPipelineVertexInputStateCreateInfo inputInfo{};
 
+		// declares how data is read from buffers
 		VkVertexInputBindingDescription vertexInputs[2]{};
-		vertexInputs[0].binding = 0;
+		vertexInputs[0].binding = 0; // bind the corresponding input buffer when drawing
 		vertexInputs[0].stride = sizeof(float) * 3;
 		vertexInputs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
@@ -584,6 +798,7 @@ namespace
 		vertexInputs[1].stride = sizeof(float) * 2;
 		vertexInputs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
+		// how the data is mapped to shaders
 		VkVertexInputAttributeDescription vertexAttributes[2]{};
 
 		// Position attribute
@@ -592,7 +807,7 @@ namespace
 		vertexAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		vertexAttributes[0].offset = 0;
 
-		// Texture attribute
+		// index attribute
 		vertexAttributes[1].binding = 1; // must match binding above
 		vertexAttributes[1].location = 1; // must match shader
 		vertexAttributes[1].format = VK_FORMAT_R32G32_SFLOAT;
@@ -603,6 +818,163 @@ namespace
 		inputInfo.pVertexBindingDescriptions = vertexInputs;
 
 		inputInfo.vertexAttributeDescriptionCount = 2; // number of vertexAttributes above
+		inputInfo.pVertexAttributeDescriptions = vertexAttributes;
+
+		inputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+		// Define which primitive (point, line, triangle, ...) the input is assembled into for rasterization.
+		VkPipelineInputAssemblyStateCreateInfo assemblyInfo{};
+		assemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+		assemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		assemblyInfo.primitiveRestartEnable = VK_FALSE;
+
+		// Define viewport and scissor regions
+		VkViewport viewport{};
+		viewport.x = 0.f;
+		viewport.y = 0.f;
+
+		viewport.width = aWindow.swapchainExtent.width;
+		viewport.height = aWindow.swapchainExtent.height;
+
+		viewport.minDepth = 0.f;
+		viewport.maxDepth = 1.f;
+
+		VkRect2D scissor{};
+		scissor.offset = VkOffset2D{ 0, 0 };
+		scissor.extent = VkExtent2D{ aWindow.swapchainExtent.width, aWindow.swapchainExtent.height };
+
+		VkPipelineViewportStateCreateInfo viewportInfo{};
+		viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+		viewportInfo.viewportCount = 1;
+		viewportInfo.pViewports = &viewport;
+		viewportInfo.scissorCount = 1;
+		viewportInfo.pScissors = &scissor;
+
+		// Define rasterization options
+		VkPipelineRasterizationStateCreateInfo rasterInfo{};
+		rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+		rasterInfo.depthClampEnable = VK_FALSE;
+		rasterInfo.rasterizerDiscardEnable = VK_FALSE;
+		rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
+		rasterInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+		rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		rasterInfo.depthBiasEnable = VK_FALSE;
+		rasterInfo.lineWidth = 1.f; // Required.
+
+
+		// Define multisampling state
+		VkPipelineMultisampleStateCreateInfo samplingInfo{};
+		samplingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+		samplingInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+		// Define blend state
+		// We define one blend state per color attachment - this example uses a single color attachment, so we only need one.
+		VkPipelineColorBlendAttachmentState blendStates[1]{};
+		blendStates[0].blendEnable = VK_FALSE;
+		blendStates[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+			VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+		VkPipelineColorBlendStateCreateInfo blendInfo{};
+		blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+		blendInfo.logicOpEnable = VK_FALSE;
+		blendInfo.attachmentCount = 1;
+		blendInfo.pAttachments = blendStates;
+
+		VkPipelineDepthStencilStateCreateInfo depthInfo{};
+		depthInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depthInfo.depthTestEnable = VK_TRUE;
+		depthInfo.depthWriteEnable = VK_TRUE;
+		depthInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+		depthInfo.minDepthBounds = 0.f;
+		depthInfo.maxDepthBounds = 1.f;
+			
+
+		// Create pipeline
+		// finally!
+		VkGraphicsPipelineCreateInfo pipeInfo{};
+		pipeInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+
+		pipeInfo.stageCount = 2; // vertex + fragment stages
+		pipeInfo.pStages = stages;
+
+		pipeInfo.pVertexInputState = &inputInfo;
+		pipeInfo.pInputAssemblyState = &assemblyInfo;
+		pipeInfo.pTessellationState = nullptr; // no tessellation
+		pipeInfo.pViewportState = &viewportInfo;
+		pipeInfo.pRasterizationState = &rasterInfo;
+		pipeInfo.pMultisampleState = &samplingInfo;
+		pipeInfo.pColorBlendState = &blendInfo;
+		pipeInfo.pDynamicState = nullptr; // no dynamic states
+		pipeInfo.pDepthStencilState = &depthInfo;
+
+		pipeInfo.layout = aPipelineLayout;
+		pipeInfo.renderPass = aRenderPass;
+		pipeInfo.subpass = 0; // first subpass of aRenderPass
+
+		VkPipeline pipe = VK_NULL_HANDLE;
+		if (auto const res = vkCreateGraphicsPipelines(aWindow.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipe);
+			VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to create graphics pipeline\n"
+				"vkCreateGraphicsPipelines() returned %s", lut::to_string(res).c_str());
+		}
+
+		return lut::Pipeline(aWindow.device, pipe);
+	}
+
+	lut::Pipeline create_model_pipeline(lut::VulkanWindow const& aWindow, VkRenderPass aRenderPass, VkPipelineLayout aPipelineLayout)
+	{
+
+		//Load shader modules
+		lut::ShaderModule vert = lut::load_shader_module(aWindow, cfg::kVertModelPath);
+		lut::ShaderModule frag = lut::load_shader_module(aWindow, cfg::kFragModelPath);
+
+		// Define shader stages in the pipeline
+		VkPipelineShaderStageCreateInfo stages[2]{};
+
+		stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+		stages[0].module = vert.handle;
+		stages[0].pName = "main";
+
+		stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+		stages[1].module = frag.handle;
+		stages[1].pName = "main";
+
+		// Pull data from the vertex buffer
+		VkPipelineVertexInputStateCreateInfo inputInfo{};
+
+		// Declare how data is read from buffer
+		VkVertexInputBindingDescription vertexInputs[1]{};
+		vertexInputs[0].binding = 0;
+		vertexInputs[0].stride = sizeof(glm::vec3);
+		vertexInputs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+		//vertexInputs[1].binding = 1;
+		//vertexInputs[1].stride = sizeof(float) * 2;
+		//vertexInputs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+		// Map data to vertex shaders' input
+		VkVertexInputAttributeDescription vertexAttributes[1]{};
+
+		// Position attribute
+		vertexAttributes[0].binding = 0; // must match binding above
+		vertexAttributes[0].location = 0; // must match shader
+		vertexAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+		vertexAttributes[0].offset = 0;
+
+		// Index attribute
+		//vertexAttributes[1].binding = 1; // must match binding above
+		//vertexAttributes[1].location = 1; // must match shader
+		//vertexAttributes[1].format = VK_FORMAT_R32G32_SFLOAT;
+		//vertexAttributes[1].offset = 0;
+
+
+		inputInfo.vertexBindingDescriptionCount = 1; // number of vertexInputs above
+		inputInfo.pVertexBindingDescriptions = vertexInputs;
+
+		inputInfo.vertexAttributeDescriptionCount = 1; // number of vertexAttributes above
 		inputInfo.pVertexAttributeDescriptions = vertexAttributes;
 
 		inputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -688,7 +1060,7 @@ namespace
 		pipeInfo.pViewportState = &viewportInfo;
 		pipeInfo.pRasterizationState = &rasterInfo;
 		pipeInfo.pMultisampleState = &samplingInfo;
-		pipeInfo.pDepthStencilState = nullptr; // no depth or stencil buffers
+		//pipeInfo.pDepthStencilState = nullptr; // no depth or stencil buffers
 		pipeInfo.pColorBlendState = &blendInfo;
 		pipeInfo.pDynamicState = nullptr; // no dynamic states
 		pipeInfo.pDepthStencilState = &depthInfo;
@@ -706,6 +1078,7 @@ namespace
 		}
 
 		return lut::Pipeline(aWindow.device, pipe);
+
 	}
 
 	void create_swapchain_framebuffers(
@@ -889,6 +1262,117 @@ namespace
 		}
 	}
 
+	void record_commands1(
+		VkCommandBuffer aCmdBuff,
+		VkRenderPass aRenderPass,
+		VkFramebuffer aFramebuffer,
+		VkPipeline aGraphicsPipe,
+		VkExtent2D const& aImageExtent,
+		VkBuffer aPositionBuffer,
+		VkBuffer aIndexBuffer,
+		std::uint32_t aIndicesCount,
+		VkBuffer aSceneUBO,
+		glsl::SceneUniform const& aSceneUniform,
+		VkPipelineLayout aGraphicsLayout,
+		VkDescriptorSet aSceneDescriptors
+	)
+	{
+		// Begin recording commands
+		VkCommandBufferBeginInfo begInfo{};
+		begInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		begInfo.pInheritanceInfo = nullptr;
+
+		if (auto const res = vkBeginCommandBuffer(aCmdBuff, &begInfo); VK_SUCCESS != res) {
+			throw lut::Error(
+				"Unable to begin recording command buffer\n"
+				"vkBeginCommandBuffer() returned %s", lut::to_string(res).c_str()
+			);
+		}
+
+
+
+		// Upload scene uniforms
+		lut::buffer_barrier(
+			aCmdBuff,
+			aSceneUBO,
+			VK_ACCESS_UNIFORM_READ_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT,
+			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT
+		);
+
+		vkCmdUpdateBuffer(
+			aCmdBuff,
+			aSceneUBO,
+			0,
+			sizeof(glsl::SceneUniform),
+			&aSceneUniform
+		);
+
+		lut::buffer_barrier(
+			aCmdBuff,
+			aSceneUBO,
+			VK_ACCESS_TRANSFER_WRITE_BIT,
+			VK_ACCESS_UNIFORM_READ_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+		);
+
+
+
+		// Begin render pass
+		VkClearValue clearValues[2]{};
+		clearValues[0].color.float32[0] = 0.1f; // Clear to a dark gray background.
+		clearValues[0].color.float32[1] = 0.1f; // Helps identify render pass visually
+		clearValues[0].color.float32[2] = 0.1f;
+		clearValues[0].color.float32[3] = 1.0f;
+
+		clearValues[1].depthStencil.depth = 1.f; // new!
+
+
+		VkRenderPassBeginInfo passInfo{};
+		passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		passInfo.renderPass = aRenderPass;
+		passInfo.framebuffer = aFramebuffer;
+		passInfo.renderArea.offset = VkOffset2D{ 0, 0 };
+		passInfo.renderArea.extent = VkExtent2D{ aImageExtent.width, aImageExtent.height };
+		passInfo.clearValueCount = 2;
+		passInfo.pClearValues = clearValues;
+
+		vkCmdBeginRenderPass(aCmdBuff, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		// Begin drawing with our graphics pipeline
+
+		// Bind
+		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsPipe);
+		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
+
+		// Bind buffers
+		VkDeviceSize posOffset = 0;
+		vkCmdBindVertexBuffers(aCmdBuff, 0, 1, &aPositionBuffer, &posOffset);
+		vkCmdBindIndexBuffer(aCmdBuff, aIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+		vkCmdDrawIndexed(aCmdBuff, aIndicesCount, 1, 0, 0, 0);
+
+
+		// End the render pass
+		vkCmdEndRenderPass(aCmdBuff);
+
+
+		// End command recording
+		if (auto const res = vkEndCommandBuffer(aCmdBuff); VK_SUCCESS != res) {
+			throw lut::Error(
+				"Unable to end recording command buffer\n"
+				"vkEndCommandBuffer() returned %s",
+				lut::to_string(res).c_str()
+			);
+		}
+
+	}
+
+
+
 	void submit_commands(lut::VulkanWindow const& aWindow, VkCommandBuffer aCmdBuff, VkFence aFence, VkSemaphore aWaitSemaphore, VkSemaphore aSignalSemaphore)
 	{
 		VkPipelineStageFlags waitPipelineStages =
@@ -914,7 +1398,6 @@ namespace
 		}
 
 	}
-
 
 	void present_results( VkQueue aPresentQueue, VkSwapchainKHR aSwapchain, std::uint32_t aImageIndex, VkSemaphore aRenderFinished, bool& aNeedToRecreateSwapchain )
 	{
