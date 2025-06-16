@@ -195,7 +195,8 @@ namespace
 		queueInfo.pQueuePriorities  = queuePriorities;
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
-		// No extra features for now.
+		deviceFeatures.fillModeNonSolid = VK_TRUE;
+
 		
 		VkDeviceCreateInfo deviceInfo{};
 		deviceInfo.sType  = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

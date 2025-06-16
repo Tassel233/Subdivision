@@ -52,6 +52,8 @@ namespace
 		constexpr char const* kVertModelPath = SHADERDIR_ "shadermodel.vert.spv";
 		constexpr char const* kFragShaderPath = SHADERDIR_ "shader3d.frag.spv";
 		constexpr char const* kFragModelPath = SHADERDIR_ "shadermodel.frag.spv";
+		constexpr char const* kFragWirePath = SHADERDIR_ "wireframe.frag.spv";
+
 
 
 #		undef SHADERDIR_
@@ -65,17 +67,17 @@ namespace
 		// minimal depth fighting. Larger ratios will introduce more depth
 		// fighting problems; smaller ratios will increase the depth buffer's
 		// resolution but will also limit the view distance.
-		constexpr float kCameraNear  = 0.1f;
-		constexpr float kCameraFar   = 100.f;
+		constexpr float kCameraNear  = 0.03f;
+		constexpr float kCameraFar   = 10.f;
 
 		constexpr auto kCameraFov    = 60.0_degf;
 
 		// General rule: for debugging, you want to be able to move around quickly in the scene (but slow down if ecessary).
 		// The exact settings here depend on the scene scale and similar settings.
-		constexpr float kCameraBaseSpeed = 1.7f; // units/second
+		constexpr float kCameraBaseSpeed = 0.8f; // units/second
 		constexpr float kCameraFastMult = 5.f; // speed multiplier
 		constexpr float kCameraSlowMult = 0.05f; // speed multiplier
-		constexpr float kCameraMouseSensitivity = 0.01f; // radians per pixel
+		constexpr float kCameraMouseSensitivity = 0.005f; // radians per pixel
 	}
 	// GLFW callbacks
 	void glfw_callback_key_press(GLFWwindow*, int, int, int, int);
@@ -140,6 +142,8 @@ namespace
 	lut::PipelineLayout create_pipeline_layout( lut::VulkanContext const&, VkDescriptorSetLayout );
 	lut::Pipeline create_pipeline( lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout );
 	lut::Pipeline create_model_pipeline(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
+	lut::Pipeline create_wireframe_pipeline(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
+
 
 
 	std::tuple<lut::Image, lut::ImageView> create_depth_buffer(lut::VulkanWindow const&, lut::Allocator const&);
@@ -179,6 +183,7 @@ namespace
 		VkCommandBuffer,
 		VkRenderPass,
 		VkFramebuffer,
+		VkPipeline,
 		VkPipeline,
 		VkExtent2D const&,
 		VkBuffer aPositionBuffer,
@@ -250,6 +255,7 @@ int main() try
 	lut::PipelineLayout pipeLayout = create_pipeline_layout( window, sceneLayout.handle);
 	//lut::Pipeline pipe = create_pipeline( window, renderPass.handle, pipeLayout.handle );
 	lut::Pipeline pipe = create_model_pipeline( window, renderPass.handle, pipeLayout.handle);
+	lut::Pipeline wire_pipe = create_wireframe_pipeline(window, renderPass.handle, pipeLayout.handle);
 
 
 	auto [depthBuffer, depthBufferView] = create_depth_buffer(window, allocator);
@@ -357,6 +363,7 @@ int main() try
 				std::tie(depthBuffer, depthBufferView) = create_depth_buffer(window, allocator);
 				//pipe = create_pipeline(window, renderPass.handle, pipeLayout.handle);
 				pipe = create_model_pipeline(window, renderPass.handle, pipeLayout.handle);
+				wire_pipe = create_wireframe_pipeline(window, renderPass.handle, pipeLayout.handle);
 				//alpha_pipe = create_alpha_pipeline(window, renderPass.handle, pipeLayout.handle);
 			}
 
@@ -468,6 +475,7 @@ int main() try
 			renderPass.handle,
 			framebuffers[imageIndex].handle,
 			pipe.handle,
+			wire_pipe.handle,
 			window.swapchainExtent,
 			modelMesh.posBuffer.buffer,
 			modelMesh.indexBuffer.buffer,
@@ -1081,6 +1089,168 @@ namespace
 
 	}
 
+	lut::Pipeline create_wireframe_pipeline(lut::VulkanWindow const& aWindow, VkRenderPass aRenderPass, VkPipelineLayout aPipelineLayout)
+	{
+		//Load shader modules
+		lut::ShaderModule vert = lut::load_shader_module(aWindow, cfg::kVertModelPath);
+		lut::ShaderModule frag = lut::load_shader_module(aWindow, cfg::kFragWirePath);
+
+		// Define shader stages in the pipeline
+		VkPipelineShaderStageCreateInfo stages[2]{};
+
+		stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+		stages[0].module = vert.handle;
+		stages[0].pName = "main";
+
+		stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+		stages[1].module = frag.handle;
+		stages[1].pName = "main";
+
+		// Pull data from the vertex buffer
+		VkPipelineVertexInputStateCreateInfo inputInfo{};
+
+		// Declare how data is read from buffer
+		VkVertexInputBindingDescription vertexInputs[1]{};
+		vertexInputs[0].binding = 0;
+		vertexInputs[0].stride = sizeof(glm::vec3);
+		vertexInputs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+		//vertexInputs[1].binding = 1;
+		//vertexInputs[1].stride = sizeof(float) * 2;
+		//vertexInputs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+		// Map data to vertex shaders' input
+		VkVertexInputAttributeDescription vertexAttributes[1]{};
+
+		// Position attribute
+		vertexAttributes[0].binding = 0; // must match binding above
+		vertexAttributes[0].location = 0; // must match shader
+		vertexAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+		vertexAttributes[0].offset = 0;
+
+		// Index attribute
+		//vertexAttributes[1].binding = 1; // must match binding above
+		//vertexAttributes[1].location = 1; // must match shader
+		//vertexAttributes[1].format = VK_FORMAT_R32G32_SFLOAT;
+		//vertexAttributes[1].offset = 0;
+
+
+		inputInfo.vertexBindingDescriptionCount = 1; // number of vertexInputs above
+		inputInfo.pVertexBindingDescriptions = vertexInputs;
+
+		inputInfo.vertexAttributeDescriptionCount = 1; // number of vertexAttributes above
+		inputInfo.pVertexAttributeDescriptions = vertexAttributes;
+
+		inputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+		// Define which primitive (point, line, triangle, ...) the input is assembled into for rasterization.
+		VkPipelineInputAssemblyStateCreateInfo assemblyInfo{};
+		assemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+		assemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		assemblyInfo.primitiveRestartEnable = VK_FALSE;
+
+		// Define viewport and scissor regions
+		VkViewport viewport{};
+		viewport.x = 0.f;
+		viewport.y = 0.f;
+
+		viewport.width = aWindow.swapchainExtent.width;
+		viewport.height = aWindow.swapchainExtent.height;
+
+		viewport.minDepth = 0.f;
+		viewport.maxDepth = 1.f;
+
+		VkRect2D scissor{};
+		scissor.offset = VkOffset2D{ 0, 0 };
+		scissor.extent = VkExtent2D{ aWindow.swapchainExtent.width, aWindow.swapchainExtent.height };
+
+		VkPipelineViewportStateCreateInfo viewportInfo{};
+		viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+		viewportInfo.viewportCount = 1;
+		viewportInfo.pViewports = &viewport;
+		viewportInfo.scissorCount = 1;
+		viewportInfo.pScissors = &scissor;
+
+		// Define rasterization(draw lines!!)
+		VkPipelineRasterizationStateCreateInfo rasterInfo{};
+		rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+		rasterInfo.depthClampEnable = VK_FALSE;
+		rasterInfo.rasterizerDiscardEnable = VK_FALSE;
+		rasterInfo.polygonMode = VK_POLYGON_MODE_LINE;
+		rasterInfo.cullMode = VK_CULL_MODE_NONE;
+		rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		rasterInfo.lineWidth = 1.f; // Required.
+		// Set bias for depth-buffer
+		rasterInfo.depthBiasEnable = VK_TRUE;
+		rasterInfo.depthBiasConstantFactor = -0.1f;   // translate a little for wireframes before mesh
+		rasterInfo.depthBiasSlopeFactor = -1.0f;
+
+
+		// Define multisampling state
+		VkPipelineMultisampleStateCreateInfo samplingInfo{};
+		samplingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+		samplingInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+		// Define blend state
+		// We define one blend state per color attachment - this example uses a single color attachment, so we only need one.
+		VkPipelineColorBlendAttachmentState blendStates[1]{};
+		blendStates[0].blendEnable = VK_FALSE;
+		blendStates[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+			VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+		VkPipelineColorBlendStateCreateInfo blendInfo{};
+		blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+		blendInfo.logicOpEnable = VK_FALSE;
+		blendInfo.attachmentCount = 1;
+		blendInfo.pAttachments = blendStates;
+
+		VkPipelineDepthStencilStateCreateInfo depthInfo{};
+		depthInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depthInfo.depthTestEnable = VK_TRUE;
+		depthInfo.depthWriteEnable = VK_TRUE;
+		depthInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+		depthInfo.minDepthBounds = 0.f;
+		depthInfo.maxDepthBounds = 1.f;
+
+
+		// Create pipeline
+		// finally!
+		VkGraphicsPipelineCreateInfo pipeInfo{};
+		pipeInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+
+		pipeInfo.stageCount = 2; // vertex + fragment stages
+		pipeInfo.pStages = stages;
+
+		pipeInfo.pVertexInputState = &inputInfo;
+		pipeInfo.pInputAssemblyState = &assemblyInfo;
+		pipeInfo.pTessellationState = nullptr; // no tessellation
+		pipeInfo.pViewportState = &viewportInfo;
+		pipeInfo.pRasterizationState = &rasterInfo;
+		pipeInfo.pMultisampleState = &samplingInfo;
+		//pipeInfo.pDepthStencilState = nullptr; // no depth or stencil buffers
+		pipeInfo.pColorBlendState = &blendInfo;
+		pipeInfo.pDynamicState = nullptr; // no dynamic states
+		pipeInfo.pDepthStencilState = &depthInfo;
+
+		pipeInfo.layout = aPipelineLayout;
+		pipeInfo.renderPass = aRenderPass;
+		pipeInfo.subpass = 0; // first subpass of aRenderPass
+
+		VkPipeline pipe = VK_NULL_HANDLE;
+		if (auto const res = vkCreateGraphicsPipelines(aWindow.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipe);
+			VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to create graphics pipeline\n"
+				"vkCreateGraphicsPipelines() returned %s", lut::to_string(res).c_str());
+		}
+
+		return lut::Pipeline(aWindow.device, pipe);
+
+	}
+
+
 	void create_swapchain_framebuffers(
 		lut::VulkanWindow const& aWindow,
 		VkRenderPass aRenderPass,
@@ -1234,7 +1404,7 @@ namespace
 
 		// Begin drawing with our graphics pipeline
 
-		// Bind
+		// Bind pipeline and descriptors
 		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsPipe);
 		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
 
@@ -1242,7 +1412,6 @@ namespace
 		// Bind vertex input
 		VkBuffer buffers[2] = { aPositionBuffer, aColorBuffer };
 		VkDeviceSize offsets[2]{};
-
 		vkCmdBindVertexBuffers(aCmdBuff, 0, 2, buffers, offsets);
 
 		// Draw vertices
@@ -1267,6 +1436,7 @@ namespace
 		VkRenderPass aRenderPass,
 		VkFramebuffer aFramebuffer,
 		VkPipeline aGraphicsPipe,
+		VkPipeline aWireframePipe,
 		VkExtent2D const& aImageExtent,
 		VkBuffer aPositionBuffer,
 		VkBuffer aIndexBuffer,
@@ -1344,16 +1514,24 @@ namespace
 
 		// Begin drawing with our graphics pipeline
 
-		// Bind
+		// Bind for mesh fill
+		// Bind pipeline and descriptors
 		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsPipe);
 		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
-
 		// Bind buffers
 		VkDeviceSize posOffset = 0;
 		vkCmdBindVertexBuffers(aCmdBuff, 0, 1, &aPositionBuffer, &posOffset);
 		vkCmdBindIndexBuffer(aCmdBuff, aIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
+		// Draw indexed meshes
 		vkCmdDrawIndexed(aCmdBuff, aIndicesCount, 1, 0, 0, 0);
+
+		// Binding for wireframes
+		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aWireframePipe);
+		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
+		vkCmdBindVertexBuffers(aCmdBuff, 0, 1, &aPositionBuffer, &posOffset);
+		vkCmdBindIndexBuffer(aCmdBuff, aIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdDrawIndexed(aCmdBuff, aIndicesCount, 1, 0, 0, 0);
+
 
 
 		// End the render pass
