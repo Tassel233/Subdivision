@@ -340,8 +340,8 @@ ColorizedMesh create_plane_mesh(labutils::VulkanContext const& aContext, labutil
 ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::Allocator const& aAllocator, labutils::GltfModel const& aModel)
 {
 
-	const auto& vertices = aModel.get_vertices();   // std::vector<Vertex>
-	const auto& indices = aModel.get_indices();    // std::vector<uint32_t>
+	const auto& vertices = aModel.get_quad_vertices();   // std::vector<Vertex>
+	const auto& indices = aModel.get_quad_indices();    // std::vector<uint32_t>
 
 	std::vector<glm::vec3> vPositions;
 	vPositions.reserve(vertices.size());
