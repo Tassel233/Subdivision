@@ -177,7 +177,7 @@ namespace
 		{
 			auto const& family = families[i];
 
-			if( VK_QUEUE_GRAPHICS_BIT & family.queueFlags )
+			if ((VK_QUEUE_GRAPHICS_BIT & family.queueFlags) && (VK_QUEUE_COMPUTE_BIT & family.queueFlags) )
 				return i;
 		}
 

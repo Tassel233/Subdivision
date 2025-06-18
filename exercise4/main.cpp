@@ -53,6 +53,8 @@ namespace
 		constexpr char const* kFragShaderPath = SHADERDIR_ "shader3d.frag.spv";
 		constexpr char const* kFragModelPath = SHADERDIR_ "shadermodel.frag.spv";
 		constexpr char const* kFragWirePath = SHADERDIR_ "wireframe.frag.spv";
+		constexpr char const* kCompShaderPath = SHADERDIR_ "test.comp.spv";
+
 
 
 
@@ -138,11 +140,14 @@ namespace
 
 	lut::DescriptorSetLayout create_scene_descriptor_layout( lut::VulkanWindow const& );
 	lut::DescriptorSetLayout create_object_descriptor_layout( lut::VulkanWindow const& );
+	lut::DescriptorSetLayout create_compute_descriptor_layout(lut::VulkanWindow const&);
 
 	lut::PipelineLayout create_pipeline_layout( lut::VulkanContext const&, VkDescriptorSetLayout );
 	lut::Pipeline create_pipeline( lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout );
 	lut::Pipeline create_model_pipeline(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
 	lut::Pipeline create_wireframe_pipeline(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
+	lut::Pipeline create_compute_pipeline(lut::VulkanWindow const&, VkPipelineLayout);
+
 
 
 
@@ -194,6 +199,15 @@ namespace
 		VkPipelineLayout,
 		VkDescriptorSet aSceneDescriptors
 	);
+
+	void record_compute_commands(
+		VkCommandBuffer aCmdBuff,
+		VkPipeline aComputePipeline,
+		VkPipelineLayout aPipelineLayout,
+		VkDescriptorSet aComputeDescriptors,
+		std::uint32_t workGroupCountX // = ceil(numElements / local_size_x
+	);
+
 
 
 	void submit_commands(
@@ -332,6 +346,102 @@ int main() try
 
 	// Application main loop
 	bool recreateSwapchain = false;
+
+	//////////////////////////////////////////////////////////////////////////////////////////////////
+
+	// compute shader test
+	lut::Buffer dataBuffer = create_buffer(
+		allocator,
+		10 * sizeof(int),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		0,
+		VMA_MEMORY_USAGE_CPU_TO_GPU
+	);
+	// wirte in data
+	int* mapped = nullptr;
+	vmaMapMemory(allocator.allocator, dataBuffer.allocation, (void**)&mapped);
+	for (int i = 0; i < 10; ++i) mapped[i] = i;
+	vmaUnmapMemory(allocator.allocator, dataBuffer.allocation);
+	// set descriptorlayout
+	lut::DescriptorSetLayout computeLayout = create_compute_descriptor_layout(window);
+	lut::PipelineLayout computepipeLayout = create_pipeline_layout(window, computeLayout.handle);
+
+	VkDescriptorSet SSBODescriptors = lut::alloc_desc_set(
+		window,
+		dpool.handle,
+		computeLayout.handle
+	);
+
+	lut::Pipeline compPipe = create_compute_pipeline(window, computepipeLayout.handle);
+	// bind descriptor
+	{
+		VkWriteDescriptorSet desc[1]{};
+
+		VkDescriptorBufferInfo SSBOInfo{};
+		SSBOInfo.buffer = dataBuffer.buffer;
+		SSBOInfo.range = VK_WHOLE_SIZE;
+
+		desc[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		desc[0].dstSet = SSBODescriptors;
+		desc[0].dstBinding = 0;
+		desc[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+
+		//desc[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		desc[0].descriptorCount = 1;
+		desc[0].pBufferInfo = &SSBOInfo;
+
+		constexpr auto numSets = sizeof(desc) / sizeof(desc[0]);
+		vkUpdateDescriptorSets(window.device, numSets, desc, 0, nullptr);
+	}
+
+
+
+
+	VkCommandBuffer compbuffer = lut::alloc_command_buffer(window, cpool.handle);
+	vmaMapMemory(allocator.allocator, dataBuffer.allocation, (void**)&mapped);
+	for (int i = 0; i < 10; ++i)
+		printf("Result[%d] = %d\n", i, mapped[i]);
+	vmaUnmapMemory(allocator.allocator, dataBuffer.allocation);
+
+	// record commands
+	record_compute_commands(compbuffer, compPipe.handle, computepipeLayout.handle, SSBODescriptors, 10);
+
+
+
+	// submit commands
+		// 1. 创建 fence，用于同步 GPU 完成信号
+	VkFenceCreateInfo fenceInfo{};
+	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+	VkFence fence = VK_NULL_HANDLE;
+	if (vkCreateFence(window.device, &fenceInfo, nullptr, &fence) != VK_SUCCESS) {
+		throw std::runtime_error("Failed to create compute fence");
+	}
+
+	// 2. 设置提交信息
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &compbuffer;
+
+	// 3. 提交到 compute queue
+	if (vkQueueSubmit(window.graphicsQueue, 1, &submitInfo, fence) != VK_SUCCESS) {
+		throw std::runtime_error("Failed to submit compute commands");
+	}
+
+	// 4. 等待 GPU 执行完成（阻塞）
+	vkWaitForFences(window.device, 1, &fence, VK_TRUE, UINT64_MAX);
+
+	// 5. 清理 fence
+	vkDestroyFence(window.device, fence, nullptr);
+
+
+	// 9. 回读并验证结果
+	vmaMapMemory(allocator.allocator, dataBuffer.allocation, (void**)&mapped);
+	for (int i = 0; i < 10; ++i)
+		printf("Result[%d] = %d\n", i, mapped[i]);
+	vmaUnmapMemory(allocator.allocator, dataBuffer.allocation);
+	///////////////////////////////////////////////////////////////////////////////////////////
 
 	while( !glfwWindowShouldClose( window.window ) )
 	{
@@ -772,7 +882,6 @@ namespace
 		return lut::PipelineLayout(aContext.device, layout);
 
 	}
-
 
 	lut::Pipeline create_pipeline(lut::VulkanWindow const& aWindow, VkRenderPass aRenderPass, VkPipelineLayout aPipelineLayout)
 	{
@@ -1250,6 +1359,45 @@ namespace
 
 	}
 
+	lut::Pipeline create_compute_pipeline(lut::VulkanWindow const& aWindow, VkPipelineLayout aPipelineLayout)
+	{
+
+		//Load shader modules
+		lut::ShaderModule comp = lut::load_shader_module(aWindow, cfg::kCompShaderPath);
+		//lut::ShaderModule frag = lut::load_shader_module(aWindow, cfg::kFragModelPath);
+
+		// Define shader stages in the pipeline
+		VkPipelineShaderStageCreateInfo stages[1]{};
+
+		stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[0].stage = VK_SHADER_STAGE_COMPUTE_BIT;
+		stages[0].module = comp.handle;
+		stages[0].pName = "main";
+
+		
+		VkComputePipelineCreateInfo pipeInfo{};
+		pipeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+		pipeInfo.stage = stages[0];
+		pipeInfo.layout = aPipelineLayout;
+
+		
+		VkPipeline pipe = VK_NULL_HANDLE;
+		if (auto const res = vkCreateComputePipelines(aWindow.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipe);
+			VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to create compute pipeline\n"
+				"vkCreateComputePipelines() returned %s", lut::to_string(res).c_str());
+		}
+
+		return lut::Pipeline(aWindow.device, pipe);
+
+	}
+
+
+
+
+
+
 
 	void create_swapchain_framebuffers(
 		lut::VulkanWindow const& aWindow,
@@ -1321,6 +1469,34 @@ namespace
 	{
 		throw lut::Error( "Not yet implemented" ); //TODO: (Section 4) implement me!
 	}
+	lut::DescriptorSetLayout create_compute_descriptor_layout(lut::VulkanWindow const& aWindow)
+	{
+		// Step 1: Describe binding for the storage buffer
+		VkDescriptorSetLayoutBinding bindings[1]{};
+		bindings[0].binding = 0; // must match binding = 0 in the shader
+		bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		bindings[0].descriptorCount = 1;
+		bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		// Step 2: Fill layout create info
+		VkDescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = sizeof(bindings) / sizeof(bindings[0]);
+		layoutInfo.pBindings = bindings;
+
+		// Step 3: Create the descriptor set layout
+		VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+		if (auto const res = vkCreateDescriptorSetLayout(aWindow.device, &layoutInfo, nullptr, &layout); VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to create descriptor set layout\n" "vkCreateDescriptorSetLayout() returned %s",
+				lut::to_string(res).c_str());
+		}
+
+		// Step 4: Return wrapped descriptor set layout
+		return lut::DescriptorSetLayout(aWindow.device, layout);
+
+	}
+
 
 	void record_commands(
 		VkCommandBuffer aCmdBuff,
@@ -1549,6 +1725,51 @@ namespace
 
 	}
 
+	void record_compute_commands(
+		VkCommandBuffer aCmdBuff,
+		VkPipeline aComputePipeline,
+		VkPipelineLayout aPipelineLayout,
+		VkDescriptorSet aComputeDescriptors,
+		std::uint32_t workGroupCountX // = ceil(numElements / local_size_x
+	)
+	{
+		// 1. Begin recording
+		VkCommandBufferBeginInfo begInfo{};
+		begInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		if (auto const res = vkBeginCommandBuffer(aCmdBuff, &begInfo); VK_SUCCESS != res) {
+			throw lut::Error(
+				"Unable to begin recording compute command buffer\n"
+				"vkBeginCommandBuffer() returned %s", lut::to_string(res).c_str()
+			);
+		}
+
+		// 2. Bind compute pipeline
+		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, aComputePipeline);
+
+		// 3. Bind descriptor sets (e.g. SSBO)
+		vkCmdBindDescriptorSets(
+			aCmdBuff,
+			VK_PIPELINE_BIND_POINT_COMPUTE,
+			aPipelineLayout,
+			0, 1,
+			&aComputeDescriptors,
+			0, nullptr
+		);
+
+		// 4. Dispatch compute shader
+		vkCmdDispatch(aCmdBuff, workGroupCountX, 1, 1);
+
+		// 5. End recording
+		if (auto const res = vkEndCommandBuffer(aCmdBuff); VK_SUCCESS != res) {
+			throw lut::Error(
+				"Unable to end compute command buffer\n"
+				"vkEndCommandBuffer() returned %s", lut::to_string(res).c_str()
+			);
+		}
+	}
+
 
 
 	void submit_commands(lut::VulkanWindow const& aWindow, VkCommandBuffer aCmdBuff, VkFence aFence, VkSemaphore aWaitSemaphore, VkSemaphore aSignalSemaphore)
@@ -1575,6 +1796,35 @@ namespace
 				"vkQueueSubmit() returned %s", lut::to_string(res).c_str());
 		}
 
+	}
+
+	void submit_compute_commands(lut::VulkanWindow const& aWindow, VkCommandBuffer cmdBuf)
+	{
+		// 1. 创建 fence，用于同步 GPU 完成信号
+		VkFenceCreateInfo fenceInfo{};
+		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+		VkFence fence = VK_NULL_HANDLE;
+		if (vkCreateFence(aWindow.device, &fenceInfo, nullptr, &fence) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to create compute fence");
+		}
+
+		// 2. 设置提交信息
+		VkSubmitInfo submitInfo{};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &cmdBuf;
+
+		// 3. 提交到 compute queue
+		if (vkQueueSubmit(aWindow.presentQueue, 1, &submitInfo, fence) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to submit compute commands");
+		}
+
+		// 4. 等待 GPU 执行完成（阻塞）
+		vkWaitForFences(aWindow.device, 1, &fence, VK_TRUE, UINT64_MAX);
+
+		// 5. 清理 fence
+		vkDestroyFence(aWindow.device, fence, nullptr);
 	}
 
 	void present_results( VkQueue aPresentQueue, VkSwapchainKHR aSwapchain, std::uint32_t aImageIndex, VkSemaphore aRenderFinished, bool& aNeedToRecreateSwapchain )

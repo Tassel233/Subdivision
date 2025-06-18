@@ -100,7 +100,8 @@ project "exercise4"
 project "exercise4-shaders"
 	local shaders = { 
 		"exercise4/shaders/*.vert",
-		"exercise4/shaders/*.frag"
+		"exercise4/shaders/*.frag",
+		"exercise4/shaders/*.comp"
 	}
 
 	kind "Utility"

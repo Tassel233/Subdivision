@@ -244,7 +244,7 @@ namespace labutils
 		// - otherwise: one GRAPHICS queue and any queue that can present
 		std::vector<std::uint32_t> queueFamilyIndices;
 
-		if (auto const index = find_queue_family(ret.physicalDevice, VK_QUEUE_GRAPHICS_BIT, ret.surface))
+		if (auto const index = find_queue_family(ret.physicalDevice, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, ret.surface))
 		{
 			ret.graphicsFamilyIndex = *index;
 
@@ -252,7 +252,7 @@ namespace labutils
 		}
 		else
 		{
-			auto graphics = find_queue_family(ret.physicalDevice, VK_QUEUE_GRAPHICS_BIT);
+			auto graphics = find_queue_family(ret.physicalDevice, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
 			auto present = find_queue_family(ret.physicalDevice, 0, ret.surface);
 
 			assert(graphics && present);
@@ -706,6 +706,14 @@ namespace
 		if (!find_queue_family(aPhysicalDev, VK_QUEUE_GRAPHICS_BIT))
 		{
 			std::fprintf(stderr, "Info: Discarding device '%s': no graphics queue family\n",
+				props.deviceName);
+			return -1.f;
+		}
+
+		// Also ensure there is a queue family that supports graphics commands
+		if (!find_queue_family(aPhysicalDev, VK_QUEUE_COMPUTE_BIT))
+		{
+			std::fprintf(stderr, "Info: Discarding device '%s': no compute queue family\n",
 				props.deviceName);
 			return -1.f;
 		}
