@@ -1,0 +1,64 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_KHR_vulkan_glsl          : enable
+
+layout(local_size_x = 64) in;
+
+/* -------- inputs -------- */
+layout(set = 0, binding = 0) readonly buffer FaceBuf    { uvec4 quadFaces[]; };
+layout(set = 0, binding = 1) readonly buffer VertBuf    { vec4  updatedVertices[]; };
+layout(set = 0, binding = 2) readonly buffer EdgePtsBuf { vec4  edgePoints[]; };
+layout(set = 0, binding = 3) readonly buffer FacePtsBuf { vec4  facePoints[]; };
+layout(set = 0, binding = 11) readonly buffer FaceEdgeBuf { uvec4 faceEdgeIndices[]; }; // ★ 新
+
+/* -------- outputs -------- */
+layout(set = 0, binding = 8) writeonly buffer FinalVerts   { vec4 finalVertices[]; };
+layout(set = 0, binding = 9) writeonly buffer FinalIndices { uint finalIndices[]; };
+
+/* -------- push const -------- */
+layout(push_constant) uniform Constants {
+    uint vertexCount;
+    uint edgeCount;
+    uint faceCount;
+} pc;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.faceCount) return;
+
+    /* 每面 9 顶点 --------------------------------------------------- */
+    uvec4 q = quadFaces[gid];          // 0..3
+    uvec4 e = faceEdgeIndices[gid];    // 4..7
+
+    uint base = gid * 9;
+    finalVertices[base + 0] = updatedVertices[q.x]; // corners 0-3
+    finalVertices[base + 1] = updatedVertices[q.y];
+    finalVertices[base + 2] = updatedVertices[q.z];
+    finalVertices[base + 3] = updatedVertices[q.w];
+    finalVertices[base + 4] = edgePoints[e.x];      // edges   4-7
+    finalVertices[base + 5] = edgePoints[e.y];
+    finalVertices[base + 6] = edgePoints[e.z];
+    finalVertices[base + 7] = edgePoints[e.w];
+    finalVertices[base + 8] = facePoints[gid];      // centre  8
+
+    /* -------- 24 索引（全部 CCW） -------- */
+    uint bi = gid * 24;      // index 写入起点
+    uint b  = base;          // 代码更短一点
+
+    // 角 0 区
+    finalIndices[bi+ 0] = b+0; finalIndices[bi+ 1] = b+4; finalIndices[bi+ 2] = b+8;
+    finalIndices[bi+ 3] = b+4; finalIndices[bi+ 4] = b+1; finalIndices[bi+ 5] = b+8;
+
+    // 角 1 区
+    finalIndices[bi+ 6] = b+1; finalIndices[bi+ 7] = b+5; finalIndices[bi+ 8] = b+8;
+    finalIndices[bi+ 9] = b+5; finalIndices[bi+10] = b+2; finalIndices[bi+11] = b+8;
+
+    // 角 2 区
+    finalIndices[bi+12] = b+2; finalIndices[bi+13] = b+6; finalIndices[bi+14] = b+8;
+    finalIndices[bi+15] = b+6; finalIndices[bi+16] = b+3; finalIndices[bi+17] = b+8;
+
+    // 角 3 区
+    finalIndices[bi+18] = b+3; finalIndices[bi+19] = b+7; finalIndices[bi+20] = b+8;
+    finalIndices[bi+21] = b+7; finalIndices[bi+22] = b+0; finalIndices[bi+23] = b+8;
+}

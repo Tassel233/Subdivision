@@ -1,0 +1,71 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_KHR_vulkan_glsl          : enable
+
+layout(local_size_x = 64) in;
+
+/* ───────── 读-only buffers ───────── */
+layout(set = 0, binding = 0)  readonly buffer CPBuf      { vec4 controlPoints[]; };   // ← vec4
+layout(set = 0, binding = 1)  readonly buffer FaceBuf    { uvec4 quadFaces[]; };
+layout(set = 0, binding = 2)  readonly buffer EdgeBuf    { uvec2 edgeList[]; };
+layout(set = 0, binding = 4)  readonly buffer VFCountBuf { uint  vertexFaceCounts[]; };
+layout(set = 0, binding = 5)  readonly buffer VFIndexBuf { uint  vertexFaceIndices[]; };
+layout(set = 0, binding = 6)  readonly buffer VECountBuf { uint  vertexEdgeCounts[]; };
+layout(set = 0, binding = 7)  readonly buffer VEIndexBuf { uint  vertexEdgeIndices[]; };
+layout(set = 0, binding = 8)  readonly buffer FacePtsBuf { vec4  facePoints[]; };     // ← vec4
+
+/* ───────── 写-only buffer ───────── */
+layout(set = 0, binding = 10) writeonly buffer NewVertsBuf { vec4 updatedVertices[]; }; // ← vec4
+
+/* ───────── 推送常量 ───────── */
+layout(push_constant) uniform Constants {
+    uint vertexCount;
+    uint edgeCount;
+    uint faceCount;
+} pc;
+
+/* ───────── 主函数 ───────── */
+void main()
+{
+    uint vID = gl_GlobalInvocationID.x;
+    if (vID >= pc.vertexCount) return;
+
+    /* 当前顶点原坐标 */
+    vec3 P = controlPoints[vID].xyz;
+
+    /* ---------- Face-point 平均 ---------- */
+    uint fCount = vertexFaceCounts[vID];
+
+    /* 累加前缀和可考虑提前离线预处理；这里沿用你原来的逐顶点求前缀和 */
+    uint fStart = 0;
+    for (uint i = 0; i < vID; ++i)
+        fStart += vertexFaceCounts[i];
+
+    vec3 F = vec3(0.0);
+    for (uint i = 0; i < fCount; ++i)
+        F += facePoints[vertexFaceIndices[fStart + i]].xyz;
+    F /= float(fCount);
+
+    /* ---------- Edge-mid 平均 ---------- */
+    uint eCount = vertexEdgeCounts[vID];
+
+    uint eStart = 0;
+    for (uint i = 0; i < vID; ++i)
+        eStart += vertexEdgeCounts[i];
+
+    vec3 R = vec3(0.0);
+    for (uint i = 0; i < eCount; ++i)
+    {
+        uvec2 e   = edgeList[vertexEdgeIndices[eStart + i]];
+        vec3 mid  = 0.5 * (controlPoints[e.x].xyz + controlPoints[e.y].xyz);
+        R += mid;
+    }
+    R /= float(eCount);
+
+    /* ---------- Catmull-Clark 顶点公式 ---------- */
+    float n   = float(eCount);          // 同时也是顶点的 valence
+    vec3 newP = (F + 2.0 * R + (n - 3.0) * P) / n;
+
+    /* 写结果（保持 vec4 步长，w 用 0.0 填充） */
+    updatedVertices[vID] = vec4(newP, 0.0);
+}

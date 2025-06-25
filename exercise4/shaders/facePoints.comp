@@ -1,0 +1,30 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_KHR_vulkan_glsl : enable
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer CPBuf      { vec4 controlPoints[]; };
+layout(set = 0, binding = 1) readonly buffer FaceBuf    { uvec4 quadFaces[]; };
+layout(set = 0, binding = 8) writeonly buffer FacePtsBuf { vec4 facePoints[]; };
+
+layout(push_constant) uniform Constants {
+    uint vertexCount;
+    uint edgeCount;
+    uint faceCount;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.faceCount) return;
+
+    uvec4 idx = quadFaces[gid];
+    //vec3 p = (controlPoints[idx.x] + controlPoints[idx.y] +controlPoints[idx.z] + controlPoints[idx.w]) / 4.0;
+    //facePoints[gid] = p;
+       vec3 p = (controlPoints[idx.x].xyz +
+             controlPoints[idx.y].xyz +
+             controlPoints[idx.z].xyz +
+             controlPoints[idx.w].xyz) * 0.25;
+
+   facePoints[gid] = vec4(p, 0.0);
+}

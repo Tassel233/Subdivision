@@ -1,0 +1,11 @@
+Model Information:
+* title:	Origami Crane
+* source:	https://sketchfab.com/3d-models/origami-crane-f0fd238aa50e4406a32ac7834c3ba376
+* author:	RunemarkStudio (https://sketchfab.com/runemarkstudio)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Origami Crane" (https://sketchfab.com/3d-models/origami-crane-f0fd238aa50e4406a32ac7834c3ba376) by RunemarkStudio (https://sketchfab.com/runemarkstudio) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
