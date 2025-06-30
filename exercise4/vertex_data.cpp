@@ -341,9 +341,14 @@ ColorizedMesh create_plane_mesh(labutils::VulkanContext const& aContext, labutil
 
 ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::Allocator const& aAllocator, labutils::GltfModel const& aModel)
 {
+	const auto& vertices = aModel.m_vertices;   // std::vector<Vertex>
+	const auto& indices = aModel.m_indices;    // std::vector<uint32_t>
 
-	const auto& vertices = aModel.get_vertices();   // std::vector<Vertex>
-	const auto& indices = aModel.get_indices();    // std::vector<uint32_t>
+
+	//const auto& vertices = aModel.m_quadVertices;   // std::vector<Vertex>
+	//const auto& indices = aModel.m_quadIndices;    // std::vector<uint32_t>
+	const auto& lineLists = aModel.m_quadLinelists;    // std::vector<uint32_t>
+
 
 	std::vector<glm::vec3> vPositions;
 	vPositions.reserve(vertices.size());
@@ -353,6 +358,8 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 
 	std::size_t posBufferSize = vPositions.size() * sizeof(glm::vec3);
 	std::size_t indexBufferSize = indices.size() * sizeof(uint32_t);
+	std::size_t lineListsBufferSize = lineLists.size() * sizeof(uint32_t);
+
 
 	// Create final position and index buffers
 	lut::Buffer vertexPosGPU = lut::create_buffer(
@@ -362,7 +369,6 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 		0, // no additional VmaAllocationCreateFlags
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE // or just VMA_MEMORY_USAGE_AUTO
 	);
-
 	lut::Buffer indexGPU = lut::create_buffer(
 		aAllocator,
 		indexBufferSize,
@@ -371,6 +377,14 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 		0, // no additional VmaAllocationCreateFlags
 		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE // or just VMA_MEMORY_USAGE_AUTO
 	);
+	lut::Buffer lineListsGPU = lut::create_buffer(
+		aAllocator,
+		lineListsBufferSize,
+		VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+		0, // no additional VmaAllocationCreateFlags
+		VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE // or just VMA_MEMORY_USAGE_AUTO
+	);
+
 
 	// create CPU visible staging buffer
 	lut::Buffer posStaging = lut::create_buffer(
@@ -379,13 +393,19 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
 	);
-
 	lut::Buffer indexStaging = lut::create_buffer(
 		aAllocator,
 		indexBufferSize,
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
 	);
+	lut::Buffer lineStaging = lut::create_buffer(
+		aAllocator,
+		lineListsBufferSize,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+	);
+
 
 	// copy data into staging buffer
 	void* posPtr = nullptr;
@@ -405,6 +425,15 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 	}
 	std::memcpy(indexPtr, indices.data(), indexBufferSize);
 	vmaUnmapMemory(aAllocator.allocator, indexStaging.allocation);
+
+	void* lineListsPtr = nullptr;
+	if (auto const res = vmaMapMemory(aAllocator.allocator, lineStaging.allocation, &lineListsPtr); VK_SUCCESS != res)
+	{
+		throw lut::Error("Mapping memory for writing\n"
+			"vmaMapMemory() returned %s", lut::to_string(res).c_str());
+	}
+	std::memcpy(lineListsPtr, lineLists.data(), lineListsBufferSize);
+	vmaUnmapMemory(aAllocator.allocator, lineStaging.allocation);
 
 	// transfer data from staging buffer to GPU buffer 
 
@@ -447,16 +476,30 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 	icopy.size = indexBufferSize;
 	vkCmdCopyBuffer(uploadCmd, indexStaging.buffer, indexGPU.buffer, 1, &icopy);
 
-	// Barrier for color buffer
+
 	lut::buffer_barrier(
 		uploadCmd,
 		indexGPU.buffer,
 		VK_ACCESS_TRANSFER_WRITE_BIT,
-		//VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
 		VK_ACCESS_INDEX_READ_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT,
 		VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
 	);
+
+	// Copy lineLists data
+	VkBufferCopy lcopy{};
+	lcopy.size = lineListsBufferSize;
+	vkCmdCopyBuffer(uploadCmd, lineStaging.buffer, lineListsGPU.buffer, 1, &lcopy);
+
+	lut::buffer_barrier(
+		uploadCmd,
+		lineListsGPU.buffer,
+		VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_ACCESS_INDEX_READ_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT,
+		VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
+	);
+
 
 	// Finish recording
 	if (auto const res = vkEndCommandBuffer(uploadCmd); VK_SUCCESS != res)
@@ -489,12 +532,16 @@ ModelMesh create_model_mesh(labutils::VulkanContext const& aContext, labutils::A
 	return ModelMesh{
 	std::move(vertexPosGPU),
 	std::move(indexGPU),
-	static_cast<uint32_t>(indices.size())
+	std::move(lineListsGPU),
+	static_cast<uint32_t>(indices.size()),
+	static_cast<uint32_t>(lineLists.size()),
+
 	//sizeof(positions) / sizeof(float) / 3  // three floats per position
 	};
 
 
 }
+
 
 template<class T>
 constexpr std::size_t std430_sizeof()
@@ -505,7 +552,7 @@ constexpr std::size_t std430_sizeof()
 SubdivisionMesh create_model_mesh_extended(labutils::VulkanContext const& aContext,labutils::Allocator const& aAllocator, labutils::GltfModel const& aModel) {
 	using namespace labutils;
 
-	const uint32_t faceCount = static_cast<uint32_t>(aModel.m_quadFacesRaw.size());
+	const uint32_t faceCount = static_cast<uint32_t>(aModel.m_quadFaces.size());
 
 	SubdivisionMesh result{};
 
@@ -612,9 +659,9 @@ SubdivisionMesh create_model_mesh_extended(labutils::VulkanContext const& aConte
 		);
 		};
 	// write only buffer
-	allocOutputBuffer(aModel.m_quadFacesRaw.size(), result.facePoints);
+	allocOutputBuffer(aModel.m_quadFaces.size(), result.facePoints);
 	allocOutputBuffer(aModel.m_edgeList.size(), result.edgePoints);
-	allocOutputBuffer(aModel.m_quadVerticesRaw.size(), result.updatedVertices);
+	allocOutputBuffer(aModel.m_quadVertices.size(), result.updatedVertices);
 	//allocOutputBuffer(aModel.m_quadFacesRaw.size() + aModel.m_edgeList.size() + aModel.m_quadVerticesRaw.size(), result.drawVertices);
 	// 加上 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT 用于 vkCmdBindVertexBuffers
 	std::size_t drawVertCount = faceCount * 9;
@@ -630,9 +677,9 @@ SubdivisionMesh create_model_mesh_extended(labutils::VulkanContext const& aConte
 
 
 
-	result.vertexCount = static_cast<uint32_t>(aModel.m_quadVerticesRaw.size());
+	result.vertexCount = static_cast<uint32_t>(aModel.m_quadVertices.size());
 	result.edgeCount = static_cast<uint32_t>(aModel.m_edgeList.size());
-	result.faceCount = static_cast<uint32_t>(aModel.m_quadFacesRaw.size());
+	result.faceCount = static_cast<uint32_t>(aModel.m_quadFaces.size());
 
 	std::size_t drawIdxCount = faceCount * 24;
 	std::size_t drawIdxSize = drawIdxCount * sizeof(uint32_t);

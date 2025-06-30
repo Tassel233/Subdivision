@@ -5,6 +5,7 @@
 #include <glm/gtc/epsilon.hpp>
 #include "gltf_model.hpp"
 #include <iostream>
+#include <unordered_set>
 
 using namespace labutils;
 
@@ -34,6 +35,26 @@ namespace
         Edge(uint32_t x, uint32_t y) : a(std::min(x, y)), b(std::max(x, y)) {}
         bool operator<(const Edge& rhs) const {
             return std::tie(a, b) < std::tie(rhs.a, rhs.b);
+        }
+    };
+
+    struct EdgeKey 
+    {
+        uint32_t v0, v1;
+
+        EdgeKey(uint32_t a, uint32_t b) {
+            if (a < b) { v0 = a; v1 = b; }
+            else { v0 = b; v1 = a; }
+        }
+
+        bool operator==(const EdgeKey& other) const {
+            return v0 == other.v0 && v1 == other.v1;
+        }
+    };
+    struct EdgeKeyHash
+    {
+        std::size_t operator()(const EdgeKey& k) const {
+            return std::hash<uint32_t>()(k.v0) ^ std::hash<uint32_t>()(k.v1 << 1);
         }
     };
 
@@ -114,35 +135,38 @@ namespace
         verts.swap(unique);                       // 压缩顶点表
     }
 
+
+
 }
 
-void GltfModel::generateTrianglesFromQuads()
+std::vector<uint32_t> GltfModel::generateTrianglesFromQuads() const
 {
-    m_quadIndicesRaw.clear();
-    m_quadIndicesRaw.reserve(m_quadFacesRaw.size() * 6); // 每个 quad 2 三角形 = 6 indices
+    std::vector<uint32_t> out;
+    out.reserve(m_quadFaces.size() * 6); // 每个 quad 2 三角形 = 6 indices
 
-    for (const auto& q : m_quadFacesRaw)
+    for (const auto& q : m_quadFaces)
     {
         // Triangle 1: a, b, c
-        m_quadIndicesRaw.push_back(q.x);
-        m_quadIndicesRaw.push_back(q.y);
-        m_quadIndicesRaw.push_back(q.z);
+        out.push_back(q.x);
+        out.push_back(q.y);
+        out.push_back(q.z);
 
         // Triangle 2: a, c, d
-        m_quadIndicesRaw.push_back(q.x);
-        m_quadIndicesRaw.push_back(q.z);
-        m_quadIndicesRaw.push_back(q.w);
+        out.push_back(q.x);
+        out.push_back(q.z);
+        out.push_back(q.w);
     }
+    return out;
 }
 
 
 void GltfModel::preprocessForSubdivision() {
     // 建立 position → canonical index
     std::unordered_map<glm::vec3, uint32_t, PosHasher> canonicalPosMap;
-    std::vector<uint32_t> vertexRemap(m_quadVerticesRaw.size());
+    std::vector<uint32_t> vertexRemap(m_quadVertices.size());
 
-    for (uint32_t i = 0; i < m_quadVerticesRaw.size(); ++i) {
-        glm::vec3 pos = m_quadVerticesRaw[i].pos;
+    for (uint32_t i = 0; i < m_quadVertices.size(); ++i) {
+        glm::vec3 pos = m_quadVertices[i].pos;
         bool found = false;
         for (const auto& [p, idx] : canonicalPosMap) {
             if (pos_equal(p, pos)) {
@@ -164,8 +188,8 @@ void GltfModel::preprocessForSubdivision() {
 
     // Step 1: 构建 edgeList 与 edgeToFace 映射
     std::map<Edge, uint32_t> edgeIndexMap;
-    for (uint32_t faceID = 0; faceID < m_quadFacesRaw.size(); ++faceID) {
-        const glm::uvec4& q = m_quadFacesRaw[faceID];
+    for (uint32_t faceID = 0; faceID < m_quadFaces.size(); ++faceID) {
+        const glm::uvec4& q = m_quadFaces[faceID];
         uint32_t vs[4] = { q.x, q.y, q.z, q.w };
         for (int i = 0; i < 4; ++i) {
             //Edge e(vs[i], vs[(i + 1) % 4]);
@@ -203,9 +227,9 @@ void GltfModel::preprocessForSubdivision() {
 
     // face —> edges
     m_faceEdgeIndices.clear();
-    m_faceEdgeIndices.reserve(m_quadFacesRaw.size());
+    m_faceEdgeIndices.reserve(m_quadFaces.size());
 
-    for (const glm::uvec4& q : m_quadFacesRaw) {
+    for (const glm::uvec4& q : m_quadFaces) {
         uint32_t v[4] = { q.x, q.y, q.z, q.w };
         glm::uvec4 fe;
         for (int i = 0; i < 4; ++i) {
@@ -244,7 +268,8 @@ void GltfModel::preprocessForSubdivision() {
 }
 
 
-bool GltfModel::loadFromFile(const std::string& path) {
+bool GltfModel::loadFromFile(const std::string& path)
+{
     tinygltf::TinyGLTF loader;
     tinygltf::Model model;
     std::string warn, err;
@@ -331,7 +356,8 @@ bool GltfModel::loadFromFile(const std::string& path) {
     // ...
 
     // 处理索引数据
-    if (idxAcc >= 0) {
+    if (idxAcc >= 0) 
+    {
         const auto& idxAccessor = model.accessors[idxAcc];
         const auto& view = model.bufferViews[idxAccessor.bufferView];
         const auto& buffer = model.buffers[view.buffer];
@@ -358,135 +384,428 @@ bool GltfModel::loadFromFile(const std::string& path) {
             return false;
         }
     }
-    else {
+    else 
+    {
         m_indices.resize(vtxCount);
         std::iota(m_indices.begin(), m_indices.end(), 0u);
     }
 
     weldVertices(m_vertices, m_indices);
 
+    m_quadVertices = m_vertices;
+
     // convert from triangle to quad to fill m_quadFaces
     // Step 1: 提取原始 position
-    std::vector<glm::vec3> rawPos;
-    for (auto& v : m_vertices)
-        rawPos.push_back(v.pos);
+    //std::vector<glm::vec3> rawPos;
+    //for (auto& v : m_vertices)
+    //    rawPos.push_back(v.pos);
 
-    // Step 2: 生成 quad 顶点坐标 + quad 索引
-    std::vector<glm::vec3> quadPos;
-    triangle_to_quads(rawPos, m_indices, quadPos, m_quadFacesRaw);
+    //// Step 2: 生成 quad 顶点坐标 + quad 索引
+    //std::vector<glm::vec3> quadPos;
+    //triangle_to_quads(rawPos, m_indices, quadPos, m_quadFaces);
 
-    // Step 3: 构建 m_quadVertices（带默认 normal/uv）
-    m_quadVerticesRaw.resize(quadPos.size());
-    for (size_t i = 0; i < quadPos.size(); ++i) {
-        m_quadVerticesRaw[i].pos = quadPos[i];
-        m_quadVerticesRaw[i].normal = glm::vec3(0, 1, 0); // 默认法线
-        m_quadVerticesRaw[i].uv = glm::vec2(0);           // 默认 UV
-    }
-    generateTrianglesFromQuads();
+    //// Step 3: 构建 m_quadVertices（带默认 normal/uv）
+    //m_quadVertices.resize(quadPos.size());
+    //for (size_t i = 0; i < quadPos.size(); ++i) {
+    //    m_quadVertices[i].pos = quadPos[i];
+    //    m_quadVertices[i].normal = glm::vec3(0, 1, 0); // 默认法线
+    //    m_quadVertices[i].uv = glm::vec2(0);           // 默认 UV
+    //}
+    //generateTrianglesFromQuads();
 
     return true;
 }
 
-//void labutils::GltfModel::load_unit_cube()
-//{
-//    // ========== 原始 Quad 顶点数据 ==========
-//    m_quadVerticesRaw = {
-//        {{-1.f, -1.f, -1.f}, {}, {}}, // 0
-//        {{ 1.f, -1.f, -1.f}, {}, {}}, // 1
-//        {{ 1.f,  1.f, -1.f}, {}, {}}, // 2
-//        {{-1.f,  1.f, -1.f}, {}, {}}, // 3
-//        {{-1.f, -1.f,  1.f}, {}, {}}, // 4
-//        {{ 1.f, -1.f,  1.f}, {}, {}}, // 5
-//        {{ 1.f,  1.f,  1.f}, {}, {}}, // 6
-//        {{-1.f,  1.f,  1.f}, {}, {}}, // 7
-//    };
-//
-//    m_quadFacesRaw = {
-//    {0, 1, 5, 4}, // bottom  y = -1
-//    {3, 2, 6, 7}, // top     y = +1
-//    {4, 5, 6, 7}, // front   z = +1
-//    {0, 1, 2, 3}, // back    z = -1
-//    {1, 5, 6, 2}, // right   x = +1
-//    {0, 4, 7, 3}, // left    x = -1
-//    };
-//
-//
-//    // 填充 quadIndicesRaw
-//    m_quadIndicesRaw.clear();
-//    for (const auto& face : m_quadFacesRaw) {
-//        m_quadIndicesRaw.push_back(face.x);
-//        m_quadIndicesRaw.push_back(face.y);
-//        m_quadIndicesRaw.push_back(face.z);
-//        m_quadIndicesRaw.push_back(face.w);
-//    }
-//
-//    // ========== 生成三角形数据（渲染用） ==========
-//    m_vertices = m_quadVerticesRaw; // 顶点数据相同
-//    m_indices.clear();
-//
-//    for (const auto& face : m_quadFacesRaw)
-//    {
-//        // 三角形 1: v0, v1, v2
-//        m_indices.push_back(face.x);
-//        m_indices.push_back(face.y);
-//        m_indices.push_back(face.z);
-//
-//        // 三角形 2: v2, v3, v0
-//        m_indices.push_back(face.z);
-//        m_indices.push_back(face.w);
-//        m_indices.push_back(face.x);
-//    }
-//}
 
-void labutils::GltfModel::load_unit_cube()
+void GltfModel::load_unit_cube()
 {
-    // 1) ───── 顶点坐标（8 个）
+    // Vertices
+    //m_vertices = {
+    //    {{-1.f, -1.f, -1.f}, {0,1,0}, {0,0}},   // 0
+    //    {{ 1.f, -1.f, -1.f}, {0,1,0}, {0,0}},   // 1
+    //    {{ 1.f,  1.f, -1.f}, {0,1,0}, {0,0}},   // 2
+    //    {{-1.f,  1.f, -1.f}, {0,1,0}, {0,0}},   // 3
+    //    {{-1.f, -1.f,  1.f}, {0,1,0}, {0,0}},   // 4
+    //    {{ 1.f, -1.f,  1.f}, {0,1,0}, {0,0}},   // 5
+    //    {{ 1.f,  1.f,  1.f}, {0,1,0}, {0,0}},   // 6
+    //    {{-1.f,  1.f,  1.f}, {0,1,0}, {0,0}},   // 7
+    //};
+
+    //// Indices
+    //m_indices = {
+    //    // +X
+    //    1,5,6,   1,6,2,
+    //    // -X
+    //    4,0,3,   4,3,7,
+    //    // +Y
+    //    3,2,6,   3,6,7,
+    //    // -Y
+    //    4,5,1,   4,1,0,
+    //    // +Z
+    //    4,5,6,   4,6,7,
+    //    // -Z
+    //    0,1,2,   0,2,3,
+    //};
+    //m_vertices = {
+    //{{-1.f, -1.f, -1.f}}, // 0
+    //{{ 1.f, -1.f, -1.f}}, // 1
+    //{{ 1.f,  1.f, -1.f}}, // 2
+    //{{-1.f,  1.f, -1.f}}, // 3
+    //{{-1.f, -1.f,  1.f}}, // 4
+    //{{ 1.f, -1.f,  1.f}}, // 5
+    //{{ 1.f,  1.f,  1.f}}, // 6
+    //{{-1.f,  1.f,  1.f}}, // 7
+
+    //// 面中心点（一个立方体 6 个面）
+    //{{ 0.f,  0.f, -1.f}}, // 8  (-Z)
+    //{{ 0.f,  0.f,  1.f}}, // 9  (+Z)
+    //{{ 0.f, -1.f,  0.f}}, // 10 (-Y)
+    //{{ 0.f,  1.f,  0.f}}, // 11 (+Y)
+    //{{-1.f,  0.f,  0.f}}, // 12 (-X)
+    //{{ 1.f,  0.f,  0.f}}, // 13 (+X)
+    //};
+
+    //m_indices = {
+    //    // Each quad split into 4 triangles around its center
+
+    //    // -Z face (0,1,2,3) and center 8
+    //    0,1,8,  1,2,8,  2,3,8,  3,0,8,
+    //    // +Z face (4,5,6,7) and center 9
+    //    4,5,9,  5,6,9,  6,7,9,  7,4,9,
+    //    // -Y face (0,1,5,4) and center 10
+    //    0,1,10, 1,5,10, 5,4,10, 4,0,10,
+    //    // +Y face (3,2,6,7) and center 11
+    //    3,2,11, 2,6,11, 6,7,11, 7,3,11,
+    //    // -X face (0,3,7,4) and center 12
+    //    0,3,12, 3,7,12, 7,4,12, 4,0,12,
+    //    // +X face (1,2,6,5) and center 13
+    //    1,2,13, 2,6,13, 6,5,13, 5,1,13,
+    //};
+
     m_vertices = {
-        {{-1.f, -1.f, -1.f}, {0,1,0}, {0,0}},   // 0
-        {{ 1.f, -1.f, -1.f}, {0,1,0}, {0,0}},   // 1
-        {{ 1.f,  1.f, -1.f}, {0,1,0}, {0,0}},   // 2
-        {{-1.f,  1.f, -1.f}, {0,1,0}, {0,0}},   // 3
-        {{-1.f, -1.f,  1.f}, {0,1,0}, {0,0}},   // 4
-        {{ 1.f, -1.f,  1.f}, {0,1,0}, {0,0}},   // 5
-        {{ 1.f,  1.f,  1.f}, {0,1,0}, {0,0}},   // 6
-        {{-1.f,  1.f,  1.f}, {0,1,0}, {0,0}},   // 7
+    {{  1.f,  1.f,  1.f }},   // 0
+    {{ -1.f, -1.f,  1.f }},   // 1
+    {{ -1.f,  1.f, -1.f }},   // 2
+    {{  1.f, -1.f, -1.f }},   // 3
     };
-
-    // 2) ───── 三角形索引（每面 2 个三角 × 6 = 12）
     m_indices = {
-        // +X (右)
-        1,5,6,   1,6,2,
-        // -X (左)
-        4,0,3,   4,3,7,
-        // +Y (顶)
-        3,2,6,   3,6,7,
-        // -Y (底)
-        4,5,1,   4,1,0,
-        // +Z (前)
-        4,5,6,   4,6,7,
-        // -Z (后)
-        0,1,2,   0,2,3,
+    0, 1, 2,   // Face 0
+    0, 3, 1,   // Face 1
+    0, 2, 3,   // Face 2
+    1, 3, 2    // Face 3
     };
 
-    // 3) ───── 复制 glTF 路径的“3 步”
-    // Step-1: 把位置提出来
-    std::vector<glm::vec3> rawPos;
-    rawPos.reserve(m_vertices.size());
-    for (auto& v : m_vertices) rawPos.push_back(v.pos);
 
-    // Step-2: 三角 → Quad
-    std::vector<glm::vec3> quadPos;
-    triangle_to_quads(rawPos, m_indices,        // 用旧算法
-        quadPos, m_quadFacesRaw); // 得到 36 个 Quad
+    m_quadVertices = m_vertices;
+    m_quadIndices= m_indices;
 
-    // Step-3: 生成 Quad 顶点数组
-    m_quadVerticesRaw.resize(quadPos.size());
-    for (size_t i = 0; i < quadPos.size(); ++i) {
-        m_quadVerticesRaw[i].pos = quadPos[i];
-        m_quadVerticesRaw[i].normal = glm::vec3(0, 1, 0);
-        m_quadVerticesRaw[i].uv = glm::vec2(0);
+
+    //// 3) ───── 复制 glTF 路径的“3 步”
+    //// Step-1: 把位置提出来
+    //std::vector<glm::vec3> rawPos;
+    //rawPos.reserve(m_vertices.size());
+    //for (auto& v : m_vertices) rawPos.push_back(v.pos);
+
+    //// Step-2: 三角 → Quad
+    //std::vector<glm::vec3> quadPos;
+    //triangle_to_quads(rawPos, m_indices,        // 用旧算法
+    //    quadPos, m_quadFacesRaw); // 得到 36 个 Quad
+
+    //// Step-3: 生成 Quad 顶点数组
+    //m_quadVerticesRaw.resize(quadPos.size());
+    //for (size_t i = 0; i < quadPos.size(); ++i) {
+    //    m_quadVerticesRaw[i].pos = quadPos[i];
+    //    m_quadVerticesRaw[i].normal = glm::vec3(0, 1, 0);
+    //    m_quadVerticesRaw[i].uv = glm::vec2(0);
+    //}
+
+    //generateTrianglesFromQuads();
+}
+
+void labutils::GltfModel::firstSubdivision()
+{
+    /* ---------- 0. 清空输出 ---------- */
+    m_quadVertices.clear();
+    m_quadFaces.clear();
+    m_quadIndices.clear();
+    m_quadLinelists.clear();
+    m_edgeList.clear();
+    m_edgeToFace.clear();
+    m_vertexFaceCounts.clear();
+    m_vertexFaceIndices.clear();
+    m_vertexEdgeCounts.clear();
+    m_vertexEdgeIndices.clear();
+    m_faceEdgeIndices.clear();
+
+    /* ---------- 1. 统计原三角拓扑 ---------- */
+    using FaceVec = std::vector<uint32_t>;          // face id 集
+    using EdgeVec = std::vector<EdgeKey>;           // incident edges
+
+    std::unordered_map<uint32_t, FaceVec> vertexFaces;
+    std::unordered_map<uint32_t, EdgeVec> vertexEdges;
+    std::unordered_map<EdgeKey, FaceVec, EdgeKeyHash> edgeToFaces;
+
+    const size_t triCount = m_indices.size() / 3;
+
+    for (size_t t = 0; t < triCount; ++t)
+    {
+        uint32_t i0 = m_indices[t * 3 + 0];
+        uint32_t i1 = m_indices[t * 3 + 1];
+        uint32_t i2 = m_indices[t * 3 + 2];
+
+        uint32_t faceId = static_cast<uint32_t>(t);
+
+        EdgeKey e01(i0, i1), e12(i1, i2), e20(i2, i0);
+
+        edgeToFaces[e01].push_back(faceId);
+        edgeToFaces[e12].push_back(faceId);
+        edgeToFaces[e20].push_back(faceId);
+
+        vertexFaces[i0].push_back(faceId);
+        vertexFaces[i1].push_back(faceId);
+        vertexFaces[i2].push_back(faceId);
+
+        vertexEdges[i0].push_back(e01);
+        vertexEdges[i0].push_back(e20);
+        vertexEdges[i1].push_back(e01);
+        vertexEdges[i1].push_back(e12);
+        vertexEdges[i2].push_back(e12);
+        vertexEdges[i2].push_back(e20);
     }
 
-    // 用现成函数把 Quad → 三角索引，供渲染
-    generateTrianglesFromQuads();
+    /* ---------- 2. 生成面点 (F) ---------- */
+    std::vector<uint32_t>  facePointIndex(triCount);
+    std::vector<glm::vec3> facePoints(triCount);
+
+    for (size_t t = 0; t < triCount; ++t)
+    {
+        uint32_t i0 = m_indices[t * 3 + 0];
+        uint32_t i1 = m_indices[t * 3 + 1];
+        uint32_t i2 = m_indices[t * 3 + 2];
+
+        glm::vec3 p = (m_vertices[i0].pos +
+            m_vertices[i1].pos +
+            m_vertices[i2].pos) / 3.0f;
+
+        Vertex fv; fv.pos = p;
+
+        facePointIndex[t] = static_cast<uint32_t>(m_quadVertices.size());
+        facePoints[t] = p;
+        m_quadVertices.push_back(fv);
+    }
+
+    /* ---------- 3. 生成边点 (R′) + 初步 edgeList ---------- */
+    std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> edgePointIndex;   // edge → vertex idx
+    std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> edgeIndexMap;     // edge → edgeList idx
+
+    struct EdgeInfo { uint32_t idx, f0, f1; };
+    std::unordered_map<EdgeKey, EdgeInfo, EdgeKeyHash> edgeMap;
+
+    for (auto& [ekey, flist] : edgeToFaces)
+    {
+        /* 3.1 计算 & 存入边点 */
+        glm::vec3 mid = (m_vertices[ekey.v0].pos + m_vertices[ekey.v1].pos) * 0.5f;
+        glm::vec3 fAvg(0.f);
+        for (uint32_t fid : flist) fAvg += facePoints[fid];
+        fAvg /= float(flist.size());
+
+        glm::vec3 edgePtPos = (mid + fAvg) * 0.5f;
+
+        Vertex ev; ev.pos = edgePtPos;
+        uint32_t vIdx = static_cast<uint32_t>(m_quadVertices.size());
+        m_quadVertices.push_back(ev);
+        edgePointIndex[ekey] = vIdx;
+
+        ///* 3.2 填 edgeList & 初始 edgeMap 行 */
+        //uint32_t eIdx = static_cast<uint32_t>(m_edgeList.size());
+        //m_edgeList.emplace_back(ekey.v0, ekey.v1);
+
+        //EdgeInfo info{};
+        //info.idx = eIdx;
+        //info.f0 = flist[0];
+        //info.f1 = (flist.size() > 1) ? flist[1] : UINT32_MAX;
+        //edgeIndexMap[ekey] = eIdx;
+        //edgeMap[ekey] = info;
+    }
+
+    /* ---------- 4. 生成新顶点 (Q,R,S 公式) ---------- */
+    std::unordered_map<uint32_t, uint32_t> newVertexIndex;  // 原顶点 id → 新顶点 idx
+
+    for (size_t vid = 0; vid < m_vertices.size(); ++vid)
+    {
+        const glm::vec3 S = m_vertices[vid].pos;
+        const auto& fvec = vertexFaces[vid];
+        const auto& evec = vertexEdges[vid];
+        const uint32_t n = static_cast<uint32_t>(fvec.size());
+
+        /* Q = facePoints 平均 */
+        glm::vec3 Q(0.f);
+        for (uint32_t fid : fvec) Q += facePoints[fid];
+        Q /= float(n);
+
+        /* R = incident edge 中点平均 */
+        glm::vec3 R(0.f);
+        for (const auto& ek : evec)
+            R += (m_vertices[ek.v0].pos + m_vertices[ek.v1].pos) * 0.5f;
+        R /= float(evec.size());
+
+        glm::vec3 newPos = (Q + 2.f * R + (float(n) - 3.f) * S) / float(n);
+
+        Vertex nv; nv.pos = newPos;
+        uint32_t newIdx = static_cast<uint32_t>(m_quadVertices.size());
+        m_quadVertices.push_back(nv);
+        newVertexIndex[vid] = newIdx;
+    }
+
+    /* ---------- 5. 生成 3 × quad/三角面 ---------- */
+    const auto registerEdge = [&](
+        uint32_t a, uint32_t b, uint32_t faceId,
+        auto& edgeMapRef, auto& edgeListRef, auto& edgeIdxRef) -> uint32_t
+        {
+            EdgeKey key(a, b);
+            auto it = edgeMapRef.find(key);
+            if (it == edgeMapRef.end())
+            {
+                /* 新边 */
+                EdgeInfo info{};
+                info.idx = static_cast<uint32_t>(edgeListRef.size());
+                info.f0 = faceId;
+                info.f1 = UINT32_MAX;
+                edgeListRef.emplace_back(key.v0, key.v1);
+                edgeMapRef.emplace(key, info);
+                edgeIdxRef[key] = info.idx;
+                return info.idx;
+            }
+            else
+            {
+                /* 二次遇到：填 faceB */
+                if (it->second.f1 == UINT32_MAX)
+                    it->second.f1 = faceId;
+                return it->second.idx;
+            }
+        };
+
+    for (size_t t = 0; t < triCount; ++t)
+    {
+        uint32_t i0 = m_indices[t * 3 + 0];
+        uint32_t i1 = m_indices[t * 3 + 1];
+        uint32_t i2 = m_indices[t * 3 + 2];
+
+        uint32_t v0 = newVertexIndex[i0];
+        uint32_t v1 = newVertexIndex[i1];
+        uint32_t v2 = newVertexIndex[i2];
+
+        uint32_t ep01 = edgePointIndex[EdgeKey(i0, i1)];
+        uint32_t ep12 = edgePointIndex[EdgeKey(i1, i2)];
+        uint32_t ep20 = edgePointIndex[EdgeKey(i2, i0)];
+        uint32_t fp = facePointIndex[t];
+
+        /* 为该三角生成 3 个 quad */
+        glm::uvec4 quads[3] = {
+            { v0,  ep01, fp,  ep20 },
+            { v1,  ep12, fp,  ep01 },
+            { v2,  ep20, fp,  ep12 }
+        };
+
+        for (int q = 0; q < 3; ++q)
+        {
+            uint32_t quadId = static_cast<uint32_t>(m_quadFaces.size());
+            m_quadFaces.push_back(quads[q]);
+
+            /* 同时注册四条边并写 faceEdgeIndices */
+            const uint32_t vs[4] = { quads[q][0], quads[q][1], quads[q][2], quads[q][3] };
+            glm::uvec4 edgeIdx;
+            for (int e = 0; e < 4; ++e)
+            {
+                uint32_t a = vs[e];
+                uint32_t b = vs[(e + 1) & 3];
+                edgeIdx[e] = registerEdge(a, b, quadId, edgeMap, m_edgeList, edgeIndexMap);
+            }
+            m_faceEdgeIndices.push_back(edgeIdx);
+        }
+    }
+
+    // fill m_quadLinelists
+    for (auto e : m_edgeList)
+    {
+        m_quadLinelists.push_back(e[0]);
+        m_quadLinelists.push_back(e[1]);
+
+    }
+
+
+    /* ---------- 6. 填 m_edgeToFace (与 m_edgeList 对齐) ---------- */
+    m_edgeToFace.resize(m_edgeList.size(), glm::uvec2(UINT32_MAX, UINT32_MAX));
+    for (auto& [key, info] : edgeMap)
+        m_edgeToFace[info.idx] = glm::uvec2(info.f0, info.f1);
+
+    /* ---------- 7. 生成 m_quadIndices（三角化） ---------- */
+    for (const auto& q : m_quadFaces)
+    {
+        /* quad → (0,1,2) (2,3,0) */
+        m_quadIndices.push_back(q[0]);
+        m_quadIndices.push_back(q[1]);
+        m_quadIndices.push_back(q[2]);
+        m_quadIndices.push_back(q[2]);
+        m_quadIndices.push_back(q[3]);
+        m_quadIndices.push_back(q[0]);
+    }
+
+    /* ---------- 8. 顶点↔面 / 顶点↔边 映射 ---------- */
+    for (size_t vid = 0; vid < m_vertices.size(); ++vid)
+    {
+        /* face adjacency */
+        const auto& fvec = vertexFaces[vid];
+        m_vertexFaceCounts.push_back(static_cast<uint32_t>(fvec.size()));
+        for (uint32_t fid : fvec) m_vertexFaceIndices.push_back(fid);
+
+        /* edge adjacency */
+        const auto& evec = vertexEdges[vid];
+        m_vertexEdgeCounts.push_back(static_cast<uint32_t>(evec.size()));
+        for (const auto& ek : evec)
+            m_vertexEdgeIndices.push_back(edgeIndexMap[ek]);
+    }
+    //debugPrintVerticesAndIndices(m_quadVertices, m_quadIndices, "Print");
+    //debugPrintEdgeList();
+    //debugPrintEdgeToFace();
+    //debugPrintQuadFaces();
+}
+
+void GltfModel::debugPrintVerticesAndIndices(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::string& name) const {
+    std::cout << "=== Debug: " << name << " ===\n";
+    std::cout << "Vertices (" << vertices.size() << "):\n";
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        const auto& v = vertices[i];
+        std::cout << "  [" << i << "]: ("
+            << v.pos.x << ", " << v.pos.y << ", " << v.pos.z << ")\n";
+    }
+
+    std::cout << "Indices (" << indices.size() << "):\n";
+    for (size_t i = 0; i < indices.size(); i += 3) {
+        std::cout << "  Triangle " << i / 3 << ": "
+            << indices[i] << ", " << indices[i + 1] << ", " << indices[i + 2] << "\n";
+    }
+    std::cout << "============================\n";
+}
+
+void GltfModel::debugPrintEdgeList() {
+    std::cout << "EdgeList (" << m_edgeList.size() << "):\n";
+    for (size_t i = 0; i < m_edgeList.size(); ++i)
+        std::cout << "  [" << i << "] " << m_edgeList[i][0] << " - " << m_edgeList[i][1] << "\n";
+}
+
+void GltfModel::debugPrintEdgeToFace() {
+    std::cout << "EdgeToFace (" << m_edgeToFace.size() << "):\n";
+    for (size_t i = 0; i < m_edgeToFace.size(); ++i)
+        std::cout << "  [" << i << "] faces " << m_edgeToFace[i][0]
+        << ", " << m_edgeToFace[i][1] << "\n";
+}
+
+void GltfModel::debugPrintQuadFaces() {
+    std::cout << "QuadFaces (" << m_quadFaces.size() << "):\n";
+    for (size_t i = 0; i < m_quadFaces.size(); ++i) {
+        const auto& q = m_quadFaces[i];
+        std::cout << "  [" << i << "] " << q[0] << "," << q[1]
+            << "," << q[2] << "," << q[3] << "\n";
+    }
 }

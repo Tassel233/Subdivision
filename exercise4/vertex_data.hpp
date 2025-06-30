@@ -21,8 +21,11 @@ struct ModelMesh
 {
 	labutils::Buffer posBuffer;
 	labutils::Buffer indexBuffer;
+	labutils::Buffer lineListsBuffer;
+
 
 	std::uint32_t indicesCount;
+	std::uint32_t lineListsCount;
 };
 
 struct SubdivisionMesh

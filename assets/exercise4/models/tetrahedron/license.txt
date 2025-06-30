@@ -1,0 +1,11 @@
+Model Information:
+* title:	Tetrahedron
+* source:	https://sketchfab.com/3d-models/tetrahedron-a016fff7c1664bc0b7457f2c99aeab98
+* author:	PTham (https://sketchfab.com/PTham)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Tetrahedron" (https://sketchfab.com/3d-models/tetrahedron-a016fff7c1664bc0b7457f2c99aeab98) by PTham (https://sketchfab.com/PTham) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
