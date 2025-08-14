@@ -115,6 +115,9 @@ namespace
 		bool wasMousing = false;
 
 		glm::mat4 camera2world = glm::identity<glm::mat4>();
+
+		// set 1 when "P" pressed to subdivide once
+		bool shouldSubdivision = 0;
 	};
 
 	// update state based on elapsed time
@@ -158,6 +161,8 @@ namespace
 	lut::Pipeline create_model_pipeline2(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
 	lut::Pipeline create_wireframe_pipeline1(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
 	lut::Pipeline create_wireframe_pipeline12(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
+	lut::Pipeline create_wireframe_pipeline22(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
+
 	lut::Pipeline create_wireframe_pipeline2(lut::VulkanWindow const&, VkRenderPass, VkPipelineLayout);
 	lut::Pipeline create_compute_pipeline(lut::VulkanWindow const&, VkPipelineLayout);
 	lut::Pipeline create_face_compute_pipeline(lut::VulkanWindow const&, VkPipelineLayout);
@@ -178,6 +183,7 @@ namespace
 		VkImageView aDepthView
 	);
 
+	glsl::SceneUniform sceneUniforms{};
 	void update_scene_uniforms(
 		glsl::SceneUniform&,
 		std::uint32_t aFramebufferWidth,
@@ -187,7 +193,9 @@ namespace
 
 	void dispatch_subdivision_passes(
 		VkCommandBuffer,
-		SubdivisionMesh const&,
+
+		SubdivisionMesh& inMesh,
+		SubdivisionMesh& outMesh,
 
 		VkPipeline,
 		VkPipelineLayout,
@@ -211,7 +219,7 @@ namespace
 		VkQueue,
 		VkCommandBuffer);
 
-	void record_commands1(
+	void rc_draw_triangles(
 		VkCommandBuffer,
 		VkRenderPass,
 		VkFramebuffer,
@@ -220,12 +228,28 @@ namespace
 		VkExtent2D const&,
 		VkBuffer aPositionBuffer,
 		VkBuffer aIndexBuffer,
+		std::uint32_t aIndicesCount,
+		VkBuffer aSceneUBO,
+		glsl::SceneUniform const&,
+		VkPipelineLayout,
+		VkDescriptorSet aSceneDescriptors
+	);
+
+	void rc_draw_quads(
+		VkCommandBuffer aCmdBuff,
+		VkRenderPass aRenderPass,
+		VkFramebuffer aFramebuffer,
+		VkPipeline aGraphicsPipe,
+		VkPipeline aWireframePipe,
+		VkExtent2D const& aImageExtent,
+		VkBuffer aPositionBuffer,
+		VkBuffer aIndexBuffer,
 		VkBuffer aLinelistsBuffer,
 		std::uint32_t aIndicesCount,
 		std::uint32_t aLinelistsCount,
 		VkBuffer aSceneUBO,
-		glsl::SceneUniform const&,
-		VkPipelineLayout,
+		glsl::SceneUniform const& aSceneUniform,
+		VkPipelineLayout aGraphicsLayout,
 		VkDescriptorSet aSceneDescriptors
 	);
 
@@ -258,22 +282,17 @@ namespace
 
 int main() try
 {
-	labutils::GltfModel model;
-	if (model.loadFromFile(cfg::modelPath))
-	{
-		std::cout << "load successfully!" << std::endl;
-		model.firstSubdivision();
-		//uploadMesh(model.vertices(), model.indices());
-		//model.preprocessForSubdivision();
-	}
-	else
-	{
-		std::cout << "load failed!" << std::endl;
-	}
 	//labutils::GltfModel model;
-	//model.load_unit_cube();
-	//model.firstSubdivision();
-
+	//if (model.loadFromFile(cfg::modelPath))
+	//{
+	//	std::cout << "load successfully!" << std::endl;
+	//}
+	//else
+	//{
+	//	std::cout << "load failed!" << std::endl;
+	//}
+	labutils::GltfModel model;
+	model.load_unit_gemometry();
 
 	// Create Vulkan Window
 	auto window = lut::make_vulkan_window();
@@ -297,7 +316,6 @@ int main() try
 	lut::RenderPass renderPass = create_render_pass( window );
 
 	lut::DescriptorSetLayout sceneLayout = create_scene_descriptor_layout( window );
-	//TODO- (Section 4) create object descriptor set layout
 
 
 	lut::PipelineLayout pipeLayout = create_pipeline_layout( window, sceneLayout.handle);
@@ -305,6 +323,7 @@ int main() try
 	lut::Pipeline pipe1 = create_model_pipeline1( window, renderPass.handle, pipeLayout.handle);
 	lut::Pipeline wire_pipe1 = create_wireframe_pipeline1(window, renderPass.handle, pipeLayout.handle);
 	lut::Pipeline wire_pipe12 = create_wireframe_pipeline12(window, renderPass.handle, pipeLayout.handle);
+	lut::Pipeline wire_pipe22 = create_wireframe_pipeline22(window, renderPass.handle, pipeLayout.handle);
 	lut::Pipeline pipe2 = create_model_pipeline2(window, renderPass.handle, pipeLayout.handle);
 	lut::Pipeline wire_pipe2 = create_wireframe_pipeline2(window, renderPass.handle, pipeLayout.handle);
 
@@ -330,8 +349,11 @@ int main() try
 	}
 
 	// Load data
-	ModelMesh modelMesh= create_model_mesh(window, allocator, model);
-	//SubdivisionMesh subMesh = create_model_mesh_extended(window, allocator, model);
+	ModelMesh modelMesh= create_model_buffer_tri(window, allocator, model);
+	SubdivisionMesh subMeshes[2];
+	//std::vector<SubdivisionMesh> subMeshes(2);
+	int curr = 0;
+	int next = 1;
 
 	// Create scene uniform buffer with lut::create_buffer()
 	lut::Buffer sceneUBO = lut::create_buffer(
@@ -373,10 +395,6 @@ int main() try
 	}
 
 
-	//TODO- (Section 4) load textures into image
-	//TODO- (Section 4) create image view for texture image
-	//TODO- (Section 4) create default texture sampler
-	//TODO- (Section 4) allocate and initialize descriptor sets for texture
 
 	//record current time
 	auto previousClock = Clock_::now();
@@ -426,179 +444,8 @@ int main() try
 	lut::Pipeline vertexcompPipe = create_vertex_compute_pipeline(window, vertexpipeLayout.handle);
 	lut::Pipeline drawcompPipe = create_draw_compute_pipeline(window, drawpipeLayout.handle);
 
-	//// face binding
-	//{
-	//	VkDescriptorBufferInfo infos[3]{};
-
-	//	infos[0].buffer = subMesh.controlPoints.buffer;
-	//	infos[0].offset = 0;
-	//	infos[0].range = VK_WHOLE_SIZE;
-
-	//	infos[1].buffer = subMesh.quadFaces.buffer;
-	//	infos[1].offset = 0;
-	//	infos[1].range = VK_WHOLE_SIZE;
-
-	//	infos[2].buffer = subMesh.facePoints.buffer;
-	//	infos[2].offset = 0;
-	//	infos[2].range = VK_WHOLE_SIZE;
-
-	//	VkWriteDescriptorSet writes[3]{};
-
-	//	// binding 0 - controlPoints
-	//	writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	//	writes[0].dstSet = faceDescriptors;
-	//	writes[0].dstBinding = 0;
-	//	writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	//	writes[0].descriptorCount = 1;
-	//	writes[0].pBufferInfo = &infos[0];
-
-	//	// binding 1 - quadFaces
-	//	writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	//	writes[1].dstSet = faceDescriptors;
-	//	writes[1].dstBinding = 1;
-	//	writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	//	writes[1].descriptorCount = 1;
-	//	writes[1].pBufferInfo = &infos[1];
-
-	//	// binding 8 - facePoints
-	//	writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	//	writes[2].dstSet = faceDescriptors;
-	//	writes[2].dstBinding = 8;
-	//	writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	//	writes[2].descriptorCount = 1;
-	//	writes[2].pBufferInfo = &infos[2];
-
-	//	vkUpdateDescriptorSets(window.device, 3, writes, 0, nullptr);
-
-	//}
-	//// edge binding
-	//{
-	//	uint32_t bindings[5] = {
-	//		0, // controlPoints
-	//		2, // edgeList
-	//		3, // edgeToFace
-	//		8, // facePoints
-	//		9  // edgePoints (output)
-	//	};
-
-	//	VkDescriptorBufferInfo edgeInfos[5]{};
-	//	edgeInfos[0] = { subMesh.controlPoints.buffer, 0, VK_WHOLE_SIZE };
-	//	edgeInfos[1] = { subMesh.edgeList.buffer, 0, VK_WHOLE_SIZE };
-	//	edgeInfos[2] = { subMesh.edgeToFace.buffer, 0, VK_WHOLE_SIZE };
-	//	edgeInfos[3] = { subMesh.facePoints.buffer, 0, VK_WHOLE_SIZE };
-	//	edgeInfos[4] = { subMesh.edgePoints.buffer, 0, VK_WHOLE_SIZE };
-
-	//	VkWriteDescriptorSet edgeWrites[5]{};
-	//	for (int i = 0; i < 5; ++i) {
-	//		edgeWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	//		edgeWrites[i].dstSet = edgeDescriptors;
-	//		edgeWrites[i].dstBinding = bindings[i];
-	//		edgeWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	//		edgeWrites[i].descriptorCount = 1;
-	//		edgeWrites[i].pBufferInfo = &edgeInfos[i];
-	//	}
-
-	//	vkUpdateDescriptorSets(window.device, 5, edgeWrites, 0, nullptr);
-
-	//}
-	//// vertex bingding
-	//{
-	//	VkDescriptorBufferInfo vertexInfos[9]{};
-
-	//	vertexInfos[0] = { subMesh.controlPoints.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[1] = { subMesh.quadFaces.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[2] = { subMesh.edgeList.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[3] = { subMesh.vertexFaceCounts.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[4] = { subMesh.vertexFaceIndices.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[5] = { subMesh.vertexEdgeCounts.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[6] = { subMesh.vertexEdgeIndices.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[7] = { subMesh.facePoints.buffer, 0, VK_WHOLE_SIZE };
-	//	vertexInfos[8] = { subMesh.updatedVertices.buffer, 0, VK_WHOLE_SIZE };
-
-	//	uint32_t bindings[9] = { 0, 1, 2, 4, 5, 6, 7, 8, 10 };
-
-	//	VkWriteDescriptorSet vertexWrites[9]{};
-	//	for (int i = 0; i < 9; ++i) {
-	//		vertexWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	//		vertexWrites[i].dstSet = vertexDescriptors;
-	//		vertexWrites[i].dstBinding = bindings[i];
-	//		vertexWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	//		vertexWrites[i].descriptorCount = 1;
-	//		vertexWrites[i].pBufferInfo = &vertexInfos[i];
-	//	}
-
-	//	vkUpdateDescriptorSets(window.device, 9, vertexWrites, 0, nullptr);
-
-	//}
-	//// draw binding
-	//{
-	//	VkDescriptorBufferInfo infos[7]{};
-
-	//	// 输入 buffers
-	//	infos[0] = { subMesh.quadFaces.buffer, 0, VK_WHOLE_SIZE };       // binding = 0
-	//	infos[1] = { subMesh.updatedVertices.buffer, 0, VK_WHOLE_SIZE }; // binding = 1
-	//	infos[2] = { subMesh.edgePoints.buffer, 0, VK_WHOLE_SIZE };      // binding = 2
-	//	infos[3] = { subMesh.facePoints.buffer, 0, VK_WHOLE_SIZE };      // binding = 3
-	//	infos[4] = { subMesh.faceEdgeIndices.buffer , 0, VK_WHOLE_SIZE };  // binding 11
-
-	//	// 输出 buffers
-	//	infos[5] = { subMesh.drawVertices.buffer    , 0, VK_WHOLE_SIZE };  // binding 8
-	//	infos[6] = { subMesh.drawIndices.buffer     , 0, VK_WHOLE_SIZE };  // binding 9
-
-	//	VkWriteDescriptorSet writes[7]{};
-	//	uint32_t bindings[7] = { 0, 1, 2, 3, 11, 8, 9 };
-
-	//	for (int i = 0; i < 7; ++i) {
-	//		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	//		writes[i].dstSet = drawDescriptors; // 你创建的 descriptor set handle
-	//		writes[i].dstBinding = bindings[i];
-	//		writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	//		writes[i].descriptorCount = 1;
-	//		writes[i].pBufferInfo = &infos[i];
-	//	}
-
-	//	vkUpdateDescriptorSets(window.device, 7, writes, 0, nullptr);
-	//}
-
-	//VkCommandBuffer subCommandbuffer = lut::alloc_command_buffer(window, cpool.handle);
-
-	//dispatch_subdivision_passes(
-	//	subCommandbuffer,
-	//	subMesh,
-	//	facecompPipe.handle,
-	//	facepipeLayout.handle,
-	//	faceDescriptors,
-	//	edgecompPipe.handle,
-	//	edgepipeLayout.handle,
-	//	edgeDescriptors,
-	//	vertexcompPipe.handle,
-	//	vertexpipeLayout.handle,
-	//	vertexDescriptors,
-	//	drawcompPipe.handle,
-	//	drawpipeLayout.handle,
-	//	drawDescriptors
-	//);
-	//submit_and_wait_for_compute(window, window.graphicsQueue, subCommandbuffer);
 
 
-	//// == 读取顶点缓冲（如果需要） ==
-	//{
-	//	size_t byteCount = subMesh.faceCount * 9 * sizeof(glm::vec4);   // 每面 9 个顶点
-	//	debug_readback_buffer(window, allocator, window.graphicsQueue,
-	//		subMesh.drawVertices,
-	//		byteCount,
-	//		"Draw Vertices");
-	//}
-
-	//// == 读取索引缓冲 ==
-	//{
-	//	size_t indexBytes = subMesh.faceCount * 24 * sizeof(uint32_t);
-	//	debug_readback_indices(window, allocator,
-	//		window.graphicsQueue,
-	//		subMesh.drawIndices,
-	//		indexBytes,
-	//		"Draw Indices");
-	//}
 
 	while( !glfwWindowShouldClose( window.window ) )
 	{
@@ -628,10 +475,10 @@ int main() try
 			if (changes.changedSize)
 			{
 				std::tie(depthBuffer, depthBufferView) = create_depth_buffer(window, allocator);
-				//pipe = create_pipeline(window, renderPass.handle, pipeLayout.handle);
 				pipe1 = create_model_pipeline1(window, renderPass.handle, pipeLayout.handle);
 				wire_pipe1 = create_wireframe_pipeline1(window, renderPass.handle, pipeLayout.handle);
 				wire_pipe12 = create_wireframe_pipeline12(window, renderPass.handle, pipeLayout.handle);
+				wire_pipe22 = create_wireframe_pipeline22(window, renderPass.handle, pipeLayout.handle);
 
 				pipe2 = create_model_pipeline2(window, renderPass.handle, pipeLayout.handle);
 				wire_pipe2 = create_wireframe_pipeline2(window, renderPass.handle, pipeLayout.handle);
@@ -722,41 +569,85 @@ int main() try
 		glsl::SceneUniform sceneUniforms{};
 		update_scene_uniforms(sceneUniforms, window.swapchainExtent.width, window.swapchainExtent.height, state);
 
-		record_commands1(
-			cbuffers[frameIndex],
-			renderPass.handle,
-			framebuffers[imageIndex].handle,
-			pipe1.handle,
-			wire_pipe12.handle,
-			window.swapchainExtent,
-			modelMesh.posBuffer.buffer,
-			modelMesh.indexBuffer.buffer,
-			modelMesh.lineListsBuffer.buffer,
-			modelMesh.indicesCount,
-			modelMesh.lineListsCount,
-			sceneUBO.buffer,
-			sceneUniforms,
-			pipeLayout.handle,
-			sceneDescriptors
-		);
-		//record_commands1(
-		//	cbuffers[frameIndex],
-		//	renderPass.handle,
-		//	framebuffers[imageIndex].handle,
-		//	pipe2.handle,
-		//	wire_pipe2.handle,
-		//	window.swapchainExtent,
-		//	subMesh.drawVertices.buffer,
-		//	subMesh.drawIndices.buffer,
-		//	subMesh.faceCount * 24,
-		//	sceneUBO.buffer,
-		//	sceneUniforms,
-		//	pipeLayout.handle,
-		//	sceneDescriptors
-		//);
+		if (state.shouldSubdivision)
+		{
+			vkDeviceWaitIdle(window.device);
 
+			if (model.subTime == 0)
+			{
+				model.firstSubdivision();
+				model.subTime++;
+
+
+				subMeshes[next] = create_model_buffer(window, allocator, model);
+				subMeshes[curr] = create_empty_buffer(window, allocator,
+					model.m_quadVertices.size(),
+					model.m_edgeList.size(),
+					model.m_quadFaces.size());
+
+				std::swap(curr, next);
+				std::cout << "subdivision first time on CPU!\n";
+			}
+			else
+			{
+				model.subdivideQuadOnce();
+				model.subTime++;
+
+				subMeshes[next] = create_model_buffer(window, allocator, model);
+				subMeshes[curr] = create_empty_buffer(window, allocator,
+					model.m_quadVertices.size(),
+					model.m_edgeList.size(),
+					model.m_quadFaces.size());
+
+				std::swap(curr, next);
+			}
+
+			state.shouldSubdivision = 0;
+		}
+		
+		// record commands according to subTime for drawing
+		if (model.subTime == 0)
+		{
+			rc_draw_triangles(
+				cbuffers[frameIndex],
+				renderPass.handle,
+				framebuffers[imageIndex].handle,
+				pipe1.handle,
+				wire_pipe12.handle,
+				window.swapchainExtent,
+				modelMesh.posBuffer.buffer,
+				modelMesh.indexBuffer.buffer,
+				modelMesh.indicesCount,
+				sceneUBO.buffer,
+				sceneUniforms,
+				pipeLayout.handle,
+				sceneDescriptors
+			);
+
+		}
+		else
+		{
+			rc_draw_quads(
+				cbuffers[frameIndex],
+				renderPass.handle,
+				framebuffers[imageIndex].handle,
+				pipe2.handle,
+				wire_pipe22.handle,
+				window.swapchainExtent,
+				subMeshes[curr].drawVertices.buffer,
+				subMeshes[curr].drawIndices.buffer,
+				subMeshes[curr].drawLinelists.buffer,
+				subMeshes[curr].faceCount * 6,
+				subMeshes[curr].edgeCount * 2,
+				sceneUBO.buffer,
+				sceneUniforms,
+				pipeLayout.handle,
+				sceneDescriptors
+			);
+		}
 
 		assert(std::size_t(frameIndex) < renderFinished.size());
+
 
 		submit_commands(
 			window,
@@ -822,6 +713,12 @@ namespace
 			break;
 		case GLFW_KEY_Q:
 			state->inputMap[std::size_t(EInputState::sink)] = !isReleased;
+			break;
+		case GLFW_KEY_P:
+			if (aAction == GLFW_PRESS)
+			{
+				state->shouldSubdivision = 1;
+			}
 			break;
 
 		case GLFW_KEY_LEFT_SHIFT: [[fallthrough]];
@@ -1484,8 +1381,10 @@ namespace
 		rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterInfo.cullMode = VK_CULL_MODE_NONE;
 		rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-		rasterInfo.depthBiasEnable = VK_FALSE;
 		rasterInfo.lineWidth = 1.f; // Required.
+		rasterInfo.depthBiasEnable = VK_TRUE;
+		rasterInfo.depthBiasConstantFactor = 1.f;   // translate a little for wireframes before mesh
+		rasterInfo.depthBiasSlopeFactor = 1.f;
 
 
 		// Define multisampling state
@@ -1579,6 +1478,158 @@ namespace
 		vertexInputs[0].stride = sizeof(glm::vec3);
 		vertexInputs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
+
+		// Map data to vertex shaders' input
+		VkVertexInputAttributeDescription vertexAttributes[1]{};
+
+		// Position attribute
+		vertexAttributes[0].binding = 0; // must match binding above
+		vertexAttributes[0].location = 0; // must match shader
+		vertexAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+		vertexAttributes[0].offset = 0;
+
+		inputInfo.vertexBindingDescriptionCount = 1; // number of vertexInputs above
+		inputInfo.pVertexBindingDescriptions = vertexInputs;
+
+		inputInfo.vertexAttributeDescriptionCount = 1; // number of vertexAttributes above
+		inputInfo.pVertexAttributeDescriptions = vertexAttributes;
+
+		inputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+		// Define which primitive (point, line, triangle, ...) the input is assembled into for rasterization.
+		VkPipelineInputAssemblyStateCreateInfo assemblyInfo{};
+		assemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+		assemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		assemblyInfo.primitiveRestartEnable = VK_FALSE;
+
+		// Define viewport and scissor regions
+		VkViewport viewport{};
+		viewport.x = 0.f;
+		viewport.y = 0.f;
+
+		viewport.width = aWindow.swapchainExtent.width;
+		viewport.height = aWindow.swapchainExtent.height;
+
+		viewport.minDepth = 0.f;
+		viewport.maxDepth = 1.f;
+
+		VkRect2D scissor{};
+		scissor.offset = VkOffset2D{ 0, 0 };
+		scissor.extent = VkExtent2D{ aWindow.swapchainExtent.width, aWindow.swapchainExtent.height };
+
+		VkPipelineViewportStateCreateInfo viewportInfo{};
+		viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+		viewportInfo.viewportCount = 1;
+		viewportInfo.pViewports = &viewport;
+		viewportInfo.scissorCount = 1;
+		viewportInfo.pScissors = &scissor;
+
+		// Define rasterization(draw lines!!)
+		VkPipelineRasterizationStateCreateInfo rasterInfo{};
+		rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+		rasterInfo.depthClampEnable = VK_FALSE;
+		rasterInfo.rasterizerDiscardEnable = VK_FALSE;
+		rasterInfo.polygonMode = VK_POLYGON_MODE_LINE;
+		rasterInfo.cullMode = VK_CULL_MODE_NONE;
+		rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		rasterInfo.lineWidth = 1.f; // Required.
+		// Set bias for depth-buffer
+		rasterInfo.depthBiasEnable = VK_FALSE;
+		//rasterInfo.depthBiasConstantFactor = -1.f;   // translate a little for wireframes before mesh
+		//rasterInfo.depthBiasSlopeFactor = -1.f;
+
+
+		// Define multisampling state
+		VkPipelineMultisampleStateCreateInfo samplingInfo{};
+		samplingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+		samplingInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+		// Define blend state
+		// We define one blend state per color attachment - this example uses a single color attachment, so we only need one.
+		VkPipelineColorBlendAttachmentState blendStates[1]{};
+		blendStates[0].blendEnable = VK_FALSE;
+		blendStates[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+			VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+		VkPipelineColorBlendStateCreateInfo blendInfo{};
+		blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+		blendInfo.logicOpEnable = VK_FALSE;
+		blendInfo.attachmentCount = 1;
+		blendInfo.pAttachments = blendStates;
+
+		VkPipelineDepthStencilStateCreateInfo depthInfo{};
+		depthInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+		depthInfo.depthTestEnable = VK_TRUE;
+		depthInfo.depthWriteEnable = VK_TRUE;
+		depthInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+		depthInfo.minDepthBounds = 0.f;
+		depthInfo.maxDepthBounds = 1.f;
+
+
+		// Create pipeline
+		// finally!
+		VkGraphicsPipelineCreateInfo pipeInfo{};
+		pipeInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+
+		pipeInfo.stageCount = 2; // vertex + fragment stages
+		pipeInfo.pStages = stages;
+
+		pipeInfo.pVertexInputState = &inputInfo;
+		pipeInfo.pInputAssemblyState = &assemblyInfo;
+		pipeInfo.pTessellationState = nullptr; // no tessellation
+		pipeInfo.pViewportState = &viewportInfo;
+		pipeInfo.pRasterizationState = &rasterInfo;
+		pipeInfo.pMultisampleState = &samplingInfo;
+		//pipeInfo.pDepthStencilState = nullptr; // no depth or stencil buffers
+		pipeInfo.pColorBlendState = &blendInfo;
+		pipeInfo.pDynamicState = nullptr; // no dynamic states
+		pipeInfo.pDepthStencilState = &depthInfo;
+
+		pipeInfo.layout = aPipelineLayout;
+		pipeInfo.renderPass = aRenderPass;
+		pipeInfo.subpass = 0; // first subpass of aRenderPass
+
+
+		VkPipeline pipe = VK_NULL_HANDLE;
+		if (auto const res = vkCreateGraphicsPipelines(aWindow.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipe);
+			VK_SUCCESS != res)
+		{
+			throw lut::Error("Unable to create graphics pipeline\n"
+				"vkCreateGraphicsPipelines() returned %s", lut::to_string(res).c_str());
+		}
+
+		return lut::Pipeline(aWindow.device, pipe);
+
+	}
+	lut::Pipeline create_wireframe_pipeline22(lut::VulkanWindow const& aWindow, VkRenderPass aRenderPass, VkPipelineLayout aPipelineLayout)
+	{
+		//Load shader modules
+		lut::ShaderModule vert = lut::load_shader_module(aWindow, cfg::kVertModelPath);
+		lut::ShaderModule frag = lut::load_shader_module(aWindow, cfg::kFragWirePath);
+
+		// Define shader stages in the pipeline
+		VkPipelineShaderStageCreateInfo stages[2]{};
+
+		stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+		stages[0].module = vert.handle;
+		stages[0].pName = "main";
+
+		stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+		stages[1].module = frag.handle;
+		stages[1].pName = "main";
+
+		// Pull data from the vertex buffer
+		VkPipelineVertexInputStateCreateInfo inputInfo{};
+
+		// Declare how data is read from buffer
+		VkVertexInputBindingDescription vertexInputs[1]{};
+		vertexInputs[0].binding = 0;
+		vertexInputs[0].stride = sizeof(glm::vec4);
+		vertexInputs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
 		//vertexInputs[1].binding = 1;
 		//vertexInputs[1].stride = sizeof(float) * 2;
 		//vertexInputs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -1603,7 +1654,7 @@ namespace
 		// Define which primitive (point, line, triangle, ...) the input is assembled into for rasterization.
 		VkPipelineInputAssemblyStateCreateInfo assemblyInfo{};
 		assemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-		assemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		assemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
 		assemblyInfo.primitiveRestartEnable = VK_FALSE;
 
 		// Define viewport and scissor regions
@@ -2434,48 +2485,53 @@ namespace
 	}
 	lut::DescriptorSetLayout create_descriptor_set_layout_draw(lut::VulkanWindow const& aWindow)
 	{
-		VkDescriptorSetLayoutBinding bindings[7]{};
+		VkDescriptorSetLayoutBinding bindings[10]{};
 
-		// Binding 0: quadFaces
+		// binding 0 : updatedVertices   (read)
 		bindings[0].binding = 0;
 		bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		bindings[0].descriptorCount = 1;
 		bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		// Binding 1: updatedVertices
+		// binding 1 : edgePoints        (read)
+		bindings[1] = bindings[0];
 		bindings[1].binding = 1;
-		bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[1].descriptorCount = 1;
-		bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		// Binding 2: edgePoints
+		// binding 2 : facePoints        (read)
+		bindings[2] = bindings[0];
 		bindings[2].binding = 2;
-		bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[2].descriptorCount = 1;
-		bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		// Binding 3: facePoints
+		// binding 3 : quadFaces         (read)
+		bindings[3] = bindings[0];
 		bindings[3].binding = 3;
-		bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[3].descriptorCount = 1;
-		bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		// Binding 8: finalVertices (write)
-		bindings[4].binding = 8;
-		bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[4].descriptorCount = 1;
-		bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+		// binding 4 : faceEdgeIndices   (read)
+		bindings[4] = bindings[0];
+		bindings[4].binding = 4;
 
-		// Binding 9: finalIndices (write)
-		bindings[5].binding = 9;
-		bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[5].descriptorCount = 1;
+		// binding 5 : finalVertices     (write ─ VBO for draw)
+		bindings[5] = bindings[0];
+		bindings[5].binding = 5;
 		bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-		bindings[6].binding = 11;
-		bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[6].descriptorCount = 1;
-		bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+		// 读写类型一样
+		// binding 6 : finalIndices      (write ─ IBO for draw)
+		bindings[6] = bindings[5];
+		bindings[6].binding = 6;
+
+		// binding 7 : newControlPoints  (write ─ 下一轮顶点池)
+		bindings[7] = bindings[5];
+		bindings[7].binding = 7;
+
+		// binding 8 : newQuadFaces      (write ─ 下一轮 quads)
+		bindings[8] = bindings[5];
+		bindings[8].binding = 8;
+
+		// binding 9 : newEdgeList       (write ─ 12×face raw edges)
+		bindings[9] = bindings[5];
+		bindings[9].binding = 9;
+
+
 
 
 
@@ -2504,7 +2560,8 @@ namespace
 
 	void dispatch_subdivision_passes(
 		VkCommandBuffer aCmdBuff,
-		SubdivisionMesh const& subMesh,
+		SubdivisionMesh& inMesh,
+		SubdivisionMesh& outMesh,
 		VkPipeline facePipeline,
 		VkPipelineLayout faceLayout,
 		VkDescriptorSet faceDescriptorSet,
@@ -2521,9 +2578,9 @@ namespace
 	{
 		// Fill constant data
 		PushConstants pc{};
-		pc.vertexCount = subMesh.vertexCount;
-		pc.edgeCount = subMesh.edgeCount;
-		pc.faceCount = subMesh.faceCount;
+		pc.vertexCount = inMesh.vertexCount;
+		pc.edgeCount = inMesh.edgeCount;
+		pc.faceCount = inMesh.faceCount;
 
 		// Begin recording commands
 		VkCommandBufferBeginInfo begInfo{};
@@ -2551,7 +2608,7 @@ namespace
 		barrier1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;    // Edge pass读
 		barrier1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier1.buffer = subMesh.facePoints.buffer;
+		barrier1.buffer = inMesh.facePoints.buffer;
 		barrier1.offset = 0;
 		barrier1.size = VK_WHOLE_SIZE;
 
@@ -2578,7 +2635,7 @@ namespace
 		barrier2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;    // Edge pass读
 		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier2.buffer = subMesh.edgePoints.buffer;
+		barrier2.buffer = inMesh.edgePoints.buffer;
 		barrier2.offset = 0;
 		barrier2.size = VK_WHOLE_SIZE;
 
@@ -2598,19 +2655,16 @@ namespace
 		vkCmdDispatch(aCmdBuff, (pc.vertexCount + 63) / 64, 1, 1);
 
 		// barrier3
-		VkBufferMemoryBarrier barriers[2]{};
+		VkBufferMemoryBarrier barriers3{};
 
 		// 3a. updatedVertices
-		barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-		barriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;  // Vertex pass 写
-		barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;   // Draw pass 读
-		barriers[0].buffer = subMesh.updatedVertices.buffer;
-		barriers[0].offset = 0;
-		barriers[0].size = VK_WHOLE_SIZE;
+		barriers3.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+		barriers3.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;  // Vertex pass 写
+		barriers3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;   // Draw pass 读
+		barriers3.buffer = inMesh.updatedVertices.buffer;
+		barriers3.offset = 0;
+		barriers3.size = VK_WHOLE_SIZE;
 
-		// 3b. edgePoints  (再次被 Draw pass 读)
-		barriers[1] = barriers[0];                // 复制公共字段
-		barriers[1].buffer = subMesh.edgePoints.buffer;  // 改 buffer
 
 		vkCmdPipelineBarrier(
 			aCmdBuff,
@@ -2618,7 +2672,7 @@ namespace
 			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,   // dstStage
 			0,
 			0, nullptr,
-			1, barriers,
+			1, &barriers3,
 			0, nullptr);
 
 		// Draw Buffers
@@ -2629,7 +2683,7 @@ namespace
 
 
 		lut::buffer_barrier(
-			aCmdBuff, subMesh.drawVertices.buffer,
+			aCmdBuff, outMesh.drawVertices.buffer,
 			VK_ACCESS_SHADER_WRITE_BIT,
 			VK_ACCESS_TRANSFER_READ_BIT,
 			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -2637,7 +2691,28 @@ namespace
 		);
 
 		lut::buffer_barrier(
-			aCmdBuff, subMesh.drawIndices.buffer,
+			aCmdBuff, outMesh.drawIndices.buffer,
+			VK_ACCESS_SHADER_WRITE_BIT,
+			VK_ACCESS_TRANSFER_READ_BIT,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT
+		);
+		lut::buffer_barrier(
+			aCmdBuff, outMesh.controlPoints.buffer,
+			VK_ACCESS_SHADER_WRITE_BIT,
+			VK_ACCESS_TRANSFER_READ_BIT,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT
+		);
+		lut::buffer_barrier(
+			aCmdBuff, outMesh.quadFaces.buffer,
+			VK_ACCESS_SHADER_WRITE_BIT,
+			VK_ACCESS_TRANSFER_READ_BIT,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT
+		);
+		lut::buffer_barrier(
+			aCmdBuff, outMesh.edgeList.buffer,
 			VK_ACCESS_SHADER_WRITE_BIT,
 			VK_ACCESS_TRANSFER_READ_BIT,
 			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -2692,7 +2767,123 @@ namespace
 
 
 
-	void record_commands1(
+	void rc_draw_triangles(
+		VkCommandBuffer aCmdBuff,
+		VkRenderPass aRenderPass,
+		VkFramebuffer aFramebuffer,
+		VkPipeline aGraphicsPipe,
+		VkPipeline aWireframePipe,
+		VkExtent2D const& aImageExtent,
+		VkBuffer aPositionBuffer,
+		VkBuffer aIndexBuffer,
+		std::uint32_t aIndicesCount,
+		VkBuffer aSceneUBO,
+		glsl::SceneUniform const& aSceneUniform,
+		VkPipelineLayout aGraphicsLayout,
+		VkDescriptorSet aSceneDescriptors
+	)
+	{
+		// Begin recording commands
+		VkCommandBufferBeginInfo begInfo{};
+		begInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		begInfo.pInheritanceInfo = nullptr;
+
+		if (auto const res = vkBeginCommandBuffer(aCmdBuff, &begInfo); VK_SUCCESS != res) {
+			throw lut::Error(
+				"Unable to begin recording command buffer\n"
+				"vkBeginCommandBuffer() returned %s", lut::to_string(res).c_str()
+			);
+		}
+
+
+
+		// Upload scene uniforms
+		lut::buffer_barrier(
+			aCmdBuff,
+			aSceneUBO,
+			VK_ACCESS_UNIFORM_READ_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT,
+			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT
+		);
+
+		vkCmdUpdateBuffer(
+			aCmdBuff,
+			aSceneUBO,
+			0,
+			sizeof(glsl::SceneUniform),
+			&aSceneUniform
+		);
+
+		lut::buffer_barrier(
+			aCmdBuff,
+			aSceneUBO,
+			VK_ACCESS_TRANSFER_WRITE_BIT,
+			VK_ACCESS_UNIFORM_READ_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+		);
+
+
+
+		// Begin render pass
+		VkClearValue clearValues[2]{};
+		clearValues[0].color.float32[0] = 0.1f; // Clear to a dark gray background.
+		clearValues[0].color.float32[1] = 0.1f; // Helps identify render pass visually
+		clearValues[0].color.float32[2] = 0.1f;
+		clearValues[0].color.float32[3] = 1.0f;
+
+		clearValues[1].depthStencil.depth = 1.f; // new!
+
+
+		VkRenderPassBeginInfo passInfo{};
+		passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		passInfo.renderPass = aRenderPass;
+		passInfo.framebuffer = aFramebuffer;
+		passInfo.renderArea.offset = VkOffset2D{ 0, 0 };
+		passInfo.renderArea.extent = VkExtent2D{ aImageExtent.width, aImageExtent.height };
+		passInfo.clearValueCount = 2;
+		passInfo.pClearValues = clearValues;
+
+		vkCmdBeginRenderPass(aCmdBuff, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		// Bind for mesh fill
+		// Bind pipeline and descriptors
+		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsPipe);
+		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
+		// Bind buffers
+		VkDeviceSize posOffset = 0;
+		vkCmdBindVertexBuffers(aCmdBuff, 0, 1, &aPositionBuffer, &posOffset);
+		vkCmdBindIndexBuffer(aCmdBuff, aIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+		// Draw indexed meshes
+		vkCmdDrawIndexed(aCmdBuff, aIndicesCount, 1, 0, 0, 0);
+
+		//Binding for wireframes
+		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aWireframePipe);
+		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
+		vkCmdBindVertexBuffers(aCmdBuff, 0, 1, &aPositionBuffer, &posOffset);
+		vkCmdBindIndexBuffer(aCmdBuff, aIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdDrawIndexed(aCmdBuff, aIndicesCount, 1, 0, 0, 0);
+
+
+
+		// End the render pass
+		vkCmdEndRenderPass(aCmdBuff);
+
+
+		// End command recording
+		if (auto const res = vkEndCommandBuffer(aCmdBuff); VK_SUCCESS != res) {
+			throw lut::Error(
+				"Unable to end recording command buffer\n"
+				"vkEndCommandBuffer() returned %s",
+				lut::to_string(res).c_str()
+			);
+		}
+
+	}
+
+	void rc_draw_quads(
 		VkCommandBuffer aCmdBuff,
 		VkRenderPass aRenderPass,
 		VkFramebuffer aFramebuffer,
@@ -2790,10 +2981,8 @@ namespace
 		vkCmdBindPipeline(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aWireframePipe);
 		vkCmdBindDescriptorSets(aCmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, aGraphicsLayout, 0, 1, &aSceneDescriptors, 0, nullptr);
 		vkCmdBindVertexBuffers(aCmdBuff, 0, 1, &aPositionBuffer, &posOffset);
-		vkCmdBindIndexBuffer(aCmdBuff, aIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-		vkCmdDrawIndexed(aCmdBuff, aIndicesCount, 1, 0, 0, 0);
-
-
+		vkCmdBindIndexBuffer(aCmdBuff, aLinelistsBuffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdDrawIndexed(aCmdBuff, aLinelistsCount, 1, 0, 0, 0);
 
 		// End the render pass
 		vkCmdEndRenderPass(aCmdBuff);
@@ -2809,6 +2998,7 @@ namespace
 		}
 
 	}
+
 
 	void record_compute_commands(
 		VkCommandBuffer aCmdBuff,

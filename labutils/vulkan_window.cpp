@@ -235,6 +235,7 @@ namespace labutils
 		std::vector<char const*> enabledDevExensions;
 
 		enabledDevExensions.emplace_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+		enabledDevExensions.emplace_back(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
 
 		for (auto const& ext : enabledDevExensions)
 			std::fprintf(stderr, "Enabling device extension: %s\n", ext);

@@ -1,64 +1,112 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_KHR_vulkan_glsl          : enable
+#extension GL_EXT_debug_printf : enable
 
 layout(local_size_x = 64) in;
 
-/* -------- inputs -------- */
-layout(set = 0, binding = 0) readonly buffer FaceBuf    { uvec4 quadFaces[]; };
-layout(set = 0, binding = 1) readonly buffer VertBuf    { vec4  updatedVertices[]; };
-layout(set = 0, binding = 2) readonly buffer EdgePtsBuf { vec4  edgePoints[]; };
-layout(set = 0, binding = 3) readonly buffer FacePtsBuf { vec4  facePoints[]; };
-layout(set = 0, binding = 11) readonly buffer FaceEdgeBuf { uvec4 faceEdgeIndices[]; }; // ★ 新
-
-/* -------- outputs -------- */
-layout(set = 0, binding = 8) writeonly buffer FinalVerts   { vec4 finalVertices[]; };
-layout(set = 0, binding = 9) writeonly buffer FinalIndices { uint finalIndices[]; };
-
-/* -------- push const -------- */
-layout(push_constant) uniform Constants {
-    uint vertexCount;
-    uint edgeCount;
+layout(push_constant) uniform PushConsts {
     uint faceCount;
+    uint edgeCount;
+    uint vertexCount;
 } pc;
 
-void main()
-{
+// ------------------- READ-ONLY -----------------------
+layout(set = 0, binding = 0, std430) readonly buffer VertBuf { vec4 updatedVertices[]; };
+layout(set = 0, binding = 1, std430) readonly buffer EdgeBuf { vec4 edgePoints[]; };
+layout(set = 0, binding = 2, std430) readonly buffer FaceBuf { vec4 facePoints[]; };
+layout(set = 0, binding = 3, std430) readonly buffer QuadFaceBuf { uvec4 quadFaces[]; };
+layout(set = 0, binding = 4, std430) readonly buffer FaceEdgeBuf { uvec4 faceEdgeIndices[]; };
+
+
+
+// -------------------- WRITE ---------------------------
+layout(set = 0, binding = 5, std430) writeonly buffer FinalVertBuf { vec4 finalVertices[]; };
+layout(set = 0, binding = 6, std430) writeonly buffer FinalIndexBuf { uint finalIndices[]; };
+layout(set = 0, binding = 7, std430) writeonly buffer NewCPBuf     { vec4 newControlPoints[]; };
+layout(set = 0, binding = 8, std430) writeonly buffer NewQuadBuf   { uvec4 newQuadFaces[]; };
+layout(set = 0, binding = 9, std430) writeonly buffer NewEdgeBuf   { uvec2 newEdgeList[]; };
+
+
+// -------------------- helper functions ----------------
+uint cornerIdx(uint vidx) { return vidx; }
+uint edgePtIdx(uint eidx) { return pc.vertexCount + eidx; }
+uint facePtIdx(uint fidx) { return pc.vertexCount + pc.edgeCount + fidx; }
+
+uvec2 canon(uvec2 e) {             // ensure e.x < e.y for easy dedup
+    return (e.x < e.y) ? e : uvec2(e.y, e.x);
+}
+
+void emitVertex(uint id, vec4 pos) {
+    finalVertices[id]    = pos;
+    newControlPoints[id] = pos;
+    
+}
+
+void main() {
+
     uint gid = gl_GlobalInvocationID.x;
     if (gid >= pc.faceCount) return;
 
-    /* 每面 9 顶点 --------------------------------------------------- */
-    uvec4 q = quadFaces[gid];          // 0..3
-    uvec4 e = faceEdgeIndices[gid];    // 4..7
+    // ---------------- gather indices -------------------
+    uvec4 q = quadFaces[gid];
+    uvec4 e = faceEdgeIndices[gid];
 
-    uint base = gid * 9;
-    finalVertices[base + 0] = updatedVertices[q.x]; // corners 0-3
-    finalVertices[base + 1] = updatedVertices[q.y];
-    finalVertices[base + 2] = updatedVertices[q.z];
-    finalVertices[base + 3] = updatedVertices[q.w];
-    finalVertices[base + 4] = edgePoints[e.x];      // edges   4-7
-    finalVertices[base + 5] = edgePoints[e.y];
-    finalVertices[base + 6] = edgePoints[e.z];
-    finalVertices[base + 7] = edgePoints[e.w];
-    finalVertices[base + 8] = facePoints[gid];      // centre  8
+    uint v0  = cornerIdx(q.x);
+    uint v1  = cornerIdx(q.y);
+    uint v2  = cornerIdx(q.z);
+    uint v3  = cornerIdx(q.w);
+    uint ep0 = edgePtIdx(e.x);
+    uint ep1 = edgePtIdx(e.y);
+    uint ep2 = edgePtIdx(e.z);
+    uint ep3 = edgePtIdx(e.w);
+    uint fp  = facePtIdx(gid);
 
-    /* -------- 24 索引（全部 CCW） -------- */
-    uint bi = gid * 24;      // index 写入起点
-    uint b  = base;          // 代码更短一点
+    // vertices
+    emitVertex(v0,  updatedVertices[q.x]);
+    emitVertex(v1,  updatedVertices[q.y]);
+    emitVertex(v2,  updatedVertices[q.z]);
+    emitVertex(v3,  updatedVertices[q.w]);
+    emitVertex(ep0, edgePoints[e.x]);
+    emitVertex(ep1, edgePoints[e.y]);
+    emitVertex(ep2, edgePoints[e.z]);
+    emitVertex(ep3, edgePoints[e.w]);
+    emitVertex(fp,  facePoints[gid]);
 
-    // 角 0 区
-    finalIndices[bi+ 0] = b+0; finalIndices[bi+ 1] = b+4; finalIndices[bi+ 2] = b+8;
-    finalIndices[bi+ 3] = b+4; finalIndices[bi+ 4] = b+1; finalIndices[bi+ 5] = b+8;
+    // index 
+    const uint idxMap[24] = uint[24](
+        v0, ep0, fp, v0, fp, ep3,
+        v1, ep1, fp, v1, fp, ep0,
+        v2, ep2, fp, v2, fp, ep1,
+        v3, ep3, fp, v3, fp, ep2);
 
-    // 角 1 区
-    finalIndices[bi+ 6] = b+1; finalIndices[bi+ 7] = b+5; finalIndices[bi+ 8] = b+8;
-    finalIndices[bi+ 9] = b+5; finalIndices[bi+10] = b+2; finalIndices[bi+11] = b+8;
+    uint base = gid * 24;
+    for (uint i = 0; i < 24; ++i) { finalIndices[base + i] = idxMap[i]; }
 
-    // 角 2 区
-    finalIndices[bi+12] = b+2; finalIndices[bi+13] = b+6; finalIndices[bi+14] = b+8;
-    finalIndices[bi+15] = b+6; finalIndices[bi+16] = b+3; finalIndices[bi+17] = b+8;
 
-    // 角 3 区
-    finalIndices[bi+18] = b+3; finalIndices[bi+19] = b+7; finalIndices[bi+20] = b+8;
-    finalIndices[bi+21] = b+7; finalIndices[bi+22] = b+0; finalIndices[bi+23] = b+8;
+
+    // ---------------- new quads ------------------------
+    uint qBase = gid * 4;
+    newQuadFaces[qBase + 0] = uvec4(v0, ep0, fp, ep3);
+    newQuadFaces[qBase + 1] = uvec4(v1, ep1, fp, ep0);
+    newQuadFaces[qBase + 2] = uvec4(v2, ep2, fp, ep1);
+    newQuadFaces[qBase + 3] = uvec4(v3, ep3, fp, ep2);
+
+    // ---------------- raw edge list (canonical, 12 per face) ----------
+    uint eBase = gid * 12;
+    newEdgeList[eBase + 0]  = canon(uvec2(v0, ep0));
+    newEdgeList[eBase + 1]  = canon(uvec2(ep0, fp));
+    newEdgeList[eBase + 2]  = canon(uvec2(fp,  ep3));
+    newEdgeList[eBase + 3]  = canon(uvec2(ep3, v0));
+
+    newEdgeList[eBase + 4]  = canon(uvec2(v1, ep1));
+    newEdgeList[eBase + 5]  = canon(uvec2(ep1, fp));
+    newEdgeList[eBase + 6]  = canon(uvec2(fp,  ep0));
+    newEdgeList[eBase + 7]  = canon(uvec2(ep0, v1));
+
+    newEdgeList[eBase + 8]  = canon(uvec2(v2, ep2));
+    newEdgeList[eBase + 9]  = canon(uvec2(ep2, fp));
+    newEdgeList[eBase +10]  = canon(uvec2(fp,  ep1));
+    newEdgeList[eBase +11]  = canon(uvec2(ep1, v2));
+
 }

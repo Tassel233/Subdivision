@@ -5,31 +5,12 @@
 layout(local_size_x = 64) in;
 
 
-layout(set = 0, binding = 0) readonly buffer CPBuf
-{                               // 16 B 对齐
-    vec4 controlPoints[];       // ← 改 vec3 → vec4
-};
+layout(set = 0, binding = 0) readonly buffer CPBuf {vec4 controlPoints[];};
+layout(set = 0, binding = 2) readonly buffer EdgeBuf {uvec2 edgeList[];};
+layout(set = 0, binding = 3) readonly buffer EdgeFace {uvec2 edgeToFace[];};
+layout(set = 0, binding = 8) readonly buffer FacePtsBuf {vec4 facePoints[];};
 
-layout(set = 0, binding = 2) readonly buffer EdgeBuf
-{
-    uvec2 edgeList[];           // 每条边的两端顶点
-};
-
-layout(set = 0, binding = 3) readonly buffer EdgeFace
-{
-    uvec2 edgeToFace[];         // 每条边相邻的两张面 (边界面可填同一个 idx)
-};
-
-layout(set = 0, binding = 8) readonly buffer FacePtsBuf
-{
-    vec4 facePoints[];          // ← 改 vec3 → vec4
-};
-
-
-layout(set = 0, binding = 9) writeonly buffer EdgePtsBuf
-{
-    vec4 edgePoints[];          // ← 改 vec3 → vec4
-};
+layout(set = 0, binding = 9) writeonly buffer EdgePtsBuf {vec4 edgePoints[];};
 
 
 layout(push_constant) uniform Constants {
@@ -43,20 +24,28 @@ void main()
 {
     uint gid = gl_GlobalInvocationID.x;
     if (gid >= pc.edgeCount) return;
+    vec3 ept;
 
-    /* 端点 */
+    // Two points on the edge
     uvec2 ev = edgeList[gid];
     vec3 v0  = controlPoints[ev.x].xyz;
     vec3 v1  = controlPoints[ev.y].xyz;
 
-    /* 邻面 */
+
+
     uvec2 fids = edgeToFace[gid];
-    vec3 f0 = facePoints[fids.x].xyz;
-    vec3 f1 = facePoints[fids.y].xyz;
-
-    /* Catmull-Clark：边点 = (v0 + v1 + f0 + f1) / 4 */
-    vec3 ept = (v0 + v1 + f0 + f1) * 0.25;
-
-    edgePoints[gid] = vec4(ept, 0.0);   // w 备用 / padding
+    if (fids.x == 0xFFFFFFFFu || fids.y == 0xFFFFFFFFu)
+    {
+        // Boundry edge
+        ept = (v0 + v1) * 0.5;
+    }
+    else
+    {   
+        // Interior edge
+        vec3 f0 = facePoints[fids.x].xyz;
+        vec3 f1 = facePoints[fids.y].xyz;
+        ept = (v0 + v1 + f0 + f1) * 0.25;
+    }
+    edgePoints[gid] = vec4(ept, 0.0);
 }
 

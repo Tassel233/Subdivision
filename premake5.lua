@@ -27,7 +27,8 @@ workspace "COMP5892M-vulkan"
 	filter "*"
 
 	-- default options for GLSLC
-	glslcOptions = "-O --target-env=vulkan1.2"
+	--glslcOptions = "-O --target-env=vulkan1.2"
+	glslcOptions = "-V --target-env vulkan1.2 -g"
 
 	-- default libraries
 	filter "system:linux"

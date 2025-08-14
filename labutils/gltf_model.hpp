@@ -14,7 +14,6 @@ namespace labutils
 		glm::vec2 uv;
 	};
 
-	// λ�� hash
 	struct PosHasher {
 		size_t operator()(glm::vec3 const& p) const noexcept {
 			size_t h1 = std::hash<float>{}(p.x);
@@ -34,7 +33,7 @@ namespace labutils
 	class GltfModel
 	{
 	public:
-
+		int subTime = 0;
 		bool loadFromFile(const std::string& path);
 		const std::vector<Vertex>& get_vertices() const { return m_vertices; }
 		const std::vector<uint32_t>& get_indices() const { return m_indices; }
@@ -48,8 +47,9 @@ namespace labutils
 
 		std::vector<uint32_t> generateTrianglesFromQuads() const;
 		void preprocessForSubdivision();
-		void load_unit_cube();
+		void load_unit_gemometry();
 		void firstSubdivision();
+		void subdivideQuadOnce();
 		void debugPrintVerticesAndIndices(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::string& name) const;
 		void debugPrintEdgeList();
 		void debugPrintEdgeToFace();
@@ -57,6 +57,7 @@ namespace labutils
 		// raw triangle data
 		std::vector<Vertex>   m_vertices;
 		std::vector<uint32_t> m_indices;
+		std::vector<uint32_t> initial_sharpness;
 
 		// quad data
 		std::vector<Vertex> m_quadVertices;
@@ -67,6 +68,8 @@ namespace labutils
 		// transferred to buffer and used in shader
 		std::vector<glm::uvec2> m_edgeList;
 		std::vector<glm::uvec2> m_edgeToFace;
+		std::vector<uint32_t> m_sharpness;
+
 		std::vector<uint32_t> m_vertexFaceCounts;
 		std::vector<uint32_t> m_vertexFaceIndices;
 		std::vector<uint32_t> m_vertexEdgeCounts;

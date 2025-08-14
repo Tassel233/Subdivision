@@ -82,6 +82,18 @@ namespace labutils::detail
 		appInfo.applicationVersion  = 2024; // academic year of 2024/25
 		appInfo.apiVersion          = VK_MAKE_API_VERSION( 0, 1, 3, 0 ); // Version 1.3
 
+
+		std::vector<VkValidationFeatureEnableEXT> enables = {
+	VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT  // 开启打印功能
+		};
+		VkValidationFeaturesEXT val_features{
+	.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+	.enabledValidationFeatureCount = static_cast<uint32_t>(enables.size()),
+	.pEnabledValidationFeatures = enables.data()
+		};
+
+
+
 		// Create instance
 		VkInstanceCreateInfo instanceInfo{};
 		instanceInfo.sType  = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -93,6 +105,7 @@ namespace labutils::detail
 		instanceInfo.ppEnabledExtensionNames  = aEnabledExtensions.data();
 
 		instanceInfo.pApplicationInfo = &appInfo;
+		instanceInfo.pNext = &val_features;
 
 		if( aEnableDebugUtils )
 		{
@@ -107,6 +120,7 @@ namespace labutils::detail
 				"vkCreateInstance() returned %s", lut::to_string(res).c_str() 
 			);
 		}
+
 
 		return instance;
 	}

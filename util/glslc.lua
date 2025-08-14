@@ -14,7 +14,8 @@ if override then
 end
 
 if "windows" == host then
-	binname = "win-x86_64/glslc.exe";
+	--binname = "win-x86_64/glslc.exe";
+	binname = "E:/VulkanSDK/Bin/glslangValidator.exe"
 elseif "linux" == host then
 	binname = "linux-x86_64/glslc";
 elseif "macosx" == host then
@@ -50,7 +51,7 @@ local glslc_build_command_ = function( kind, ext, opt, opath, ipaths )
 		buildmessage( "GLSLC: [" .. kind .. "] '%{file.name}'" );
 		buildcommands( "{mkdir} \"" .. odir .. "\"" );
 		buildcommands(
-			 "\"%{wks.location}/" .. glslc ..  "\" "
+			 "\"" .. glslc ..  "\" "
 			 .. opt .. " "
 			 .. istr 
 			 .. "-o \"" .. ofile .. "\" "
