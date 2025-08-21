@@ -1,0 +1,11 @@
+Model Information:
+* title:	screw
+* source:	https://sketchfab.com/3d-models/screw-f3e9544ad9df44ab9e159cc5e0c4d827
+* author:	leqsus (https://sketchfab.com/leqsus)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "screw" (https://sketchfab.com/3d-models/screw-f3e9544ad9df44ab9e159cc5e0c4d827) by leqsus (https://sketchfab.com/leqsus) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)

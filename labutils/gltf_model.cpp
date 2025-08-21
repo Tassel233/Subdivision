@@ -190,7 +190,7 @@ namespace
 std::vector<uint32_t> GltfModel::generateTrianglesFromQuads() const
 {
     std::vector<uint32_t> out;
-    out.reserve(m_quadFaces.size() * 6); // 每个 quad 2 三角形 = 6 indices
+    out.reserve(m_quadFaces.size() * 6); 
 
     for (const auto& q : m_quadFaces)
     {
@@ -209,7 +209,7 @@ std::vector<uint32_t> GltfModel::generateTrianglesFromQuads() const
 
 
 void GltfModel::preprocessForSubdivision() {
-    // 建立 position → canonical index
+    
     std::unordered_map<glm::vec3, uint32_t, PosHasher> canonicalPosMap;
     std::vector<uint32_t> vertexRemap(m_quadVertices.size());
 
@@ -234,7 +234,7 @@ void GltfModel::preprocessForSubdivision() {
     std::map<uint32_t, std::vector<uint32_t>> vertexFaces; // Vertex -> Faces
     std::map<uint32_t, std::vector<uint32_t>> vertexEdges; // Vertex -> Edges
 
-    // Step 1: 构建 edgeList 与 edgeToFace 映射
+    
     std::map<Edge, uint32_t> edgeIndexMap;
     for (uint32_t faceID = 0; faceID < m_quadFaces.size(); ++faceID) {
         const glm::uvec4& q = m_quadFaces[faceID];
@@ -247,7 +247,7 @@ void GltfModel::preprocessForSubdivision() {
                 eid = static_cast<uint32_t>(m_edgeList.size());
                 edgeIndexMap[e] = eid;
                 m_edgeList.emplace_back(glm::uvec2(e.a, e.b));
-                m_edgeToFace.emplace_back(glm::uvec2(~0u, ~0u)); // 占位
+                m_edgeToFace.emplace_back(glm::uvec2(~0u, ~0u));
             }
             else {
                 eid = edgeIndexMap[e];
@@ -264,7 +264,7 @@ void GltfModel::preprocessForSubdivision() {
         }
     }
 
-    // Step 3: 建立 vertex -> edges 映射
+    
     for (uint32_t eid = 0; eid < m_edgeList.size(); ++eid) {
         const glm::uvec2& e = m_edgeList[eid];
         uint32_t v0 = vertexRemap[e.x];
@@ -281,28 +281,28 @@ void GltfModel::preprocessForSubdivision() {
         uint32_t v[4] = { q.x, q.y, q.z, q.w };
         glm::uvec4 fe;
         for (int i = 0; i < 4; ++i) {
-            Edge e(vertexRemap[v[i]],                      //  remap
+            Edge e(vertexRemap[v[i]],
                 vertexRemap[v[(i + 1) & 3]]);
-            fe[i] = edgeIndexMap[e];                       // 一定命中
+            fe[i] = edgeIndexMap[e];
         }
         m_faceEdgeIndices.push_back(fe);
     }
 
-    uint32_t canonicalVertexCount = static_cast<uint32_t>(canonicalPosMap.size()); // 或用 uniqueRemapped.size()
+    uint32_t canonicalVertexCount = static_cast<uint32_t>(canonicalPosMap.size());
 
-    // Step 4: 打包 vertex->faces 索引列表
+    
     m_vertexFaceCounts.clear();
     m_vertexFaceIndices.clear();
 
     for (uint32_t i = 0; i < canonicalVertexCount; ++i)
     {
-        const auto& list = vertexFaces[i];        // vertexFaces 以 canonical idx 为 key
+        const auto& list = vertexFaces[i];
         m_vertexFaceCounts.push_back(static_cast<uint32_t>(list.size()));
         m_vertexFaceIndices.insert(m_vertexFaceIndices.end(), list.begin(), list.end());
     }
 
 
-    // Step 5: 打包 vertex->edges 索引列表
+    
     m_vertexEdgeCounts.clear();
     m_vertexEdgeIndices.clear();
 
@@ -482,7 +482,7 @@ void GltfModel::load_unit_gemometry()
     //{{ 1.f,  1.f,  1.f}}, // 6
     //{{-1.f,  1.f,  1.f}}, // 7
 
-    //// 面中心点（一个立方体 6 个面）
+   
     //{{ 0.f,  0.f, -1.f}}, // 8  (-Z)
     //{{ 0.f,  0.f,  1.f}}, // 9  (+Z)
     //{{ 0.f, -1.f,  0.f}}, // 10 (-Y)
@@ -595,7 +595,7 @@ void labutils::GltfModel::firstSubdivision()
 
             EdgeKey edges[3] = { EdgeKey(i0,i1), EdgeKey(i1,i2), EdgeKey(i2,i0) };
             for (auto& ek : edges)
-                if (seen.insert(ek).second)                   // 首次遇到唯一边
+                if (seen.insert(ek).second)
                 {
                     uint32_t s = (sharpIdx < initial_sharpness.size()) ?
                         initial_sharpness[sharpIdx] : 0;
@@ -605,11 +605,11 @@ void labutils::GltfModel::firstSubdivision()
         }
 
         if (sharpIdx != initial_sharpness.size())
-            std::cerr << "[firstSubdivision]  initial_sharpness 数量(" << initial_sharpness.size()
-            << ") 与唯一边数(" << sharpIdx << ") 不一致！\n";
+            std::cerr << "[firstSubdivision]  initial_sharpness counts(" << initial_sharpness.size()
+            << ") don't match with(" << sharpIdx << ") \n";
     }
 
-    /* ---------- 0. 清空输出 ---------- */
+    
     m_quadVertices.clear();
     m_quadFaces.clear();
     m_quadIndices.clear();
@@ -646,7 +646,7 @@ void labutils::GltfModel::firstSubdivision()
         vertexEdges[i2].push_back(e12);  vertexEdges[i2].push_back(e20);
     }
 
-    /*------------- 2. 面点 ----------*/
+    
     std::vector<uint32_t>  facePointIdx(triCnt);
     std::vector<glm::vec3> facePoints(triCnt);
 
@@ -660,7 +660,7 @@ void labutils::GltfModel::firstSubdivision()
         m_quadVertices.push_back(Vertex{ p });
     }
 
-    /*------------- 3. 边点（Inf-sharp 或 Smooth） ----------*/
+    
     std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> edgePtIdx;
     std::unordered_map<uint32_t, EdgeKey>             edgePtParent;
 
@@ -678,7 +678,6 @@ void labutils::GltfModel::firstSubdivision()
         edgePtIdx[ek] = vid; edgePtParent[vid] = ek;
     }
 
-    /*------------- 4. 新顶点（dart / crease / corner / smooth） ----------*/
     std::unordered_map<uint32_t, uint32_t> newVIdx;
 
     for (uint32_t vid = 0; vid < m_vertices.size(); ++vid)
@@ -702,7 +701,6 @@ void labutils::GltfModel::firstSubdivision()
         newVIdx[vid] = nid;
     }
 
-    /*------------- 5. 三角 → 3 个 Quad，同时注册新边 & 锐度 ----------*/
     struct EdgeInfo { uint32_t idx, f0, f1; };
     std::unordered_map<EdgeKey, EdgeInfo, EdgeKeyHash> edgeMap;
     //std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> edgeIdxMap;
@@ -759,15 +757,12 @@ void labutils::GltfModel::firstSubdivision()
         }
     }
 
-    /* ---------- 6. 填 m_edgeToFace (与 m_edgeList 对齐) ---------- */
     m_edgeToFace.resize(m_edgeList.size(), glm::uvec2(UINT32_MAX, UINT32_MAX));
     for (auto& [key, info] : edgeMap)
         m_edgeToFace[info.idx] = glm::uvec2(info.f0, info.f1);
 
-    /* ---------- 7. 生成 m_quadIndices（三角化） ---------- */
     for (const auto& q : m_quadFaces)
     {
-        /* quad → (0,1,2) (2,3,0) */
         m_quadIndices.push_back(q[0]);
         m_quadIndices.push_back(q[1]);
         m_quadIndices.push_back(q[2]);
@@ -776,7 +771,6 @@ void labutils::GltfModel::firstSubdivision()
         m_quadIndices.push_back(q[0]);
     }
 
-    /* ---------- 8. 顶点↔面 / 顶点↔边 映射 ---------- */
     //for (size_t vid = 0; vid < m_vertices.size(); ++vid)
     //{
     //    /* face adjacency */
@@ -792,52 +786,44 @@ void labutils::GltfModel::firstSubdivision()
     //}
     // 
 
-    // V'：细分后总顶点数
     const uint32_t Vp = static_cast<uint32_t>(m_quadVertices.size());
 
-    // 8-1 先为每个顶点准备空邻接表
-    std::vector<std::vector<uint32_t>> vFaces(Vp);   // 顶点 -> 面 id 集
-    std::vector<std::vector<uint32_t>> vEdges(Vp);   // 顶点 -> 边 id 集
+    std::vector<std::vector<uint32_t>> vFaces(Vp);   
+    std::vector<std::vector<uint32_t>> vEdges(Vp);   
 
-    /* 8-2  扫描所有四边形，填邻接 */
     for (uint32_t fid = 0; fid < m_quadFaces.size(); ++fid)
     {
         const glm::uvec4& q = m_quadFaces[fid];
 
-        /* 8-2-a  四个顶点都属于该面 */
+
         for (int k = 0; k < 4; ++k)
             vFaces[q[k]].push_back(fid);
 
-        /* 8-2-b  四条边：记得给 a、b 双向都登记 */
         const uint32_t v[4] = { q[0], q[1], q[2], q[3] };
         for (int e = 0; e < 4; ++e)
         {
             uint32_t a = v[e];
             uint32_t b = v[(e + 1) & 3];
 
-            // EdgeKey 的构造必须与前面 registerEdge() 一致（同一方向 or canonical）
-            EdgeKey key(a, b);                 // 如你的 EdgeKey 会自动 canon，则无需交换；若不 canon，确保顺序一致
-            uint32_t eid = edgeIndexMap[key];  // 一定已存在
+            EdgeKey key(a, b);                 
+            uint32_t eid = edgeIndexMap[key];  
 
             vEdges[a].push_back(eid);
-            vEdges[b].push_back(eid);          // 另一端也要记录
+            vEdges[b].push_back(eid);         
         }
     }
 
-    /* 8-3  扁平化写入 counts / indices （prefix-sum 布局） */
     m_vertexFaceCounts.reserve(Vp);
     m_vertexEdgeCounts.reserve(Vp);
-    m_vertexFaceIndices.reserve(Vp * 4);               // 估个大概容量，避免多次 reallocate
+    m_vertexFaceIndices.reserve(Vp * 4);              
     m_vertexEdgeIndices.reserve(m_edgeList.size() * 2);
 
     for (uint32_t vid = 0; vid < Vp; ++vid)
     {
-        /* Face 邻接 */
         m_vertexFaceCounts.push_back(static_cast<uint32_t>(vFaces[vid].size()));
         for (uint32_t fid : vFaces[vid])
             m_vertexFaceIndices.push_back(fid);
 
-        /* Edge 邻接 */
         m_vertexEdgeCounts.push_back(static_cast<uint32_t>(vEdges[vid].size()));
         for (uint32_t eid : vEdges[vid])
             m_vertexEdgeIndices.push_back(eid);
@@ -847,17 +833,17 @@ void labutils::GltfModel::firstSubdivision()
     //debugPrintEdgeToFace();
     //debugPrintQuadFaces();
     m_quadLinelists.clear();
-    m_quadLinelists.reserve(m_edgeList.size() * 2); // 每条边有2个顶点
+    m_quadLinelists.reserve(m_edgeList.size() * 2); 
 
     for (const auto& edge : m_edgeList) {
-        m_quadLinelists.push_back(edge.x); // 第一个顶点
-        m_quadLinelists.push_back(edge.y); // 第二个顶点
+        m_quadLinelists.push_back(edge.x); 
+        m_quadLinelists.push_back(edge.y); 
     }
 }
 
 void labutils::GltfModel::subdivideQuadOnce()
 {
-    /*------------------ 0. 备份旧网格 ------------------*/
+
     const auto oldVerts = m_quadVertices;
     const auto oldFaces = m_quadFaces;
     const auto oldEdges = m_edgeList;
@@ -867,14 +853,12 @@ void labutils::GltfModel::subdivideQuadOnce()
     std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> sharpOld;
     buildSharpMap(oldEdges, oldSharp, sharpOld);
 
-    /*------------------ 0-b. 清空输出 ------------------*/
     m_quadVertices.clear();   m_quadFaces.clear();  m_quadIndices.clear();
     m_quadLinelists.clear();  m_edgeList.clear();   m_edgeToFace.clear();
     m_sharpness.clear();      m_vertexFaceCounts.clear();
     m_vertexFaceIndices.clear(); m_vertexEdgeCounts.clear();
     m_vertexEdgeIndices.clear(); m_faceEdgeIndices.clear();
 
-    /*------------- 1. 旧拓扑（vertexFaces / edgeToFaces） ----------*/
     using FaceVec = std::vector<uint32_t>;
     using EdgeVec = std::vector<EdgeKey>;
     std::unordered_map<uint32_t, FaceVec> vertexFaces;
@@ -896,7 +880,6 @@ void labutils::GltfModel::subdivideQuadOnce()
         }
     }
 
-    /*------------- 2. 面点 ----------*/
     std::vector<uint32_t> facePtIdx(faceCnt);
     std::vector<glm::vec3> facePts(faceCnt);
     for (uint32_t fid = 0; fid < faceCnt; ++fid)
@@ -909,7 +892,6 @@ void labutils::GltfModel::subdivideQuadOnce()
         m_quadVertices.push_back(Vertex{ p });
     }
 
-    /*------------- 3. 边点 ----------*/
     std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> edgePtIdx;
     std::unordered_map<uint32_t, EdgeKey>             edgePtParent;
 
@@ -926,7 +908,6 @@ void labutils::GltfModel::subdivideQuadOnce()
         edgePtIdx[ek] = vid; edgePtParent[vid] = ek;
     }
 
-    /*------------- 4. 新顶点 ----------*/
     std::unordered_map<uint32_t, uint32_t> newVIdx;
     for (uint32_t vid = 0; vid < oldVerts.size(); ++vid)
     {
@@ -949,7 +930,6 @@ void labutils::GltfModel::subdivideQuadOnce()
         newVIdx[vid] = nid;
     }
 
-    /*------------- 5. 新 Quad + 锐度递减 ----------*/
     struct EdgeInfo { uint32_t idx, f0, f1; };
     std::unordered_map<EdgeKey, EdgeInfo, EdgeKeyHash> edgeMap;
     std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> edgeIndexMap;
@@ -974,7 +954,7 @@ void labutils::GltfModel::subdivideQuadOnce()
             if (it == edgePtParent.end()) return 0;
             uint32_t s = sharpOld[it->second];
             if (s == 0) return 0;
-            return s - 1;                     // 子边锐度 = 父锐度 - 1 (≥0 已在上面判断)
+            return s - 1;                     
         };
 
     for (uint32_t fid = 0; fid < faceCnt; ++fid)
@@ -1007,26 +987,22 @@ void labutils::GltfModel::subdivideQuadOnce()
             m_faceEdgeIndices.push_back(eIdx);
         }
     }
-    /* ---------- 6. 填 m_quadLinelists ---------- */
     for (auto e : m_edgeList)
     {
         m_quadLinelists.push_back(e[0]);
         m_quadLinelists.push_back(e[1]);
     }
 
-    /* ---------- 7. 生成 m_edgeToFace（与 m_edgeList 对齐） ---------- */
     m_edgeToFace.resize(m_edgeList.size(), glm::uvec2(UINT32_MAX, UINT32_MAX));
     for (auto& [key, info] : edgeMap)
         m_edgeToFace[info.idx] = glm::uvec2(info.f0, info.f1);
 
-    /* ---------- 8. 生成 m_quadIndices（三角化） ---------- */
     for (const auto& q : m_quadFaces)
     {
         m_quadIndices.push_back(q[0]); m_quadIndices.push_back(q[1]); m_quadIndices.push_back(q[2]);
         m_quadIndices.push_back(q[2]); m_quadIndices.push_back(q[3]); m_quadIndices.push_back(q[0]);
     }
 
-    /* ---------- 9. 顶点 ↔ 面 / 边 邻接  ---------- */
     const uint32_t Vp = static_cast<uint32_t>(m_quadVertices.size());
     std::vector<std::vector<uint32_t>> vFaces(Vp);
     std::vector<std::vector<uint32_t>> vEdges(Vp);
@@ -1048,7 +1024,6 @@ void labutils::GltfModel::subdivideQuadOnce()
         }
     }
 
-    /* 扁平化写入 */
     m_vertexFaceCounts.reserve(Vp);
     m_vertexEdgeCounts.reserve(Vp);
     m_vertexFaceIndices.reserve(Vp * 4);

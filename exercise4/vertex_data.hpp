@@ -92,17 +92,17 @@ void debug_readback_buffer(
 
 void debug_edge_list(
 	labutils::VulkanContext const& ctx,
-	labutils::Allocator     const& alloc,
-	VkQueue                        queue,
+	labutils::Allocator const& alloc,
+	VkQueue queue,
 	labutils::Buffer const& edgeBuf,
 	std::size_t                    edgeCount);
 
 void debug_edge_to_face(
 	labutils::VulkanContext const& ctx,
-	labutils::Allocator     const& alloc,
-	VkQueue                        queue,
+	labutils::Allocator const& alloc,
+	VkQueue queue,
 	labutils::Buffer const& edgeFaceBuf,
-	std::size_t                    edgeCount);
+	std::size_t edgeCount);
 
 void debug_readback_indices(
 	labutils::VulkanContext const& aContext,
@@ -117,7 +117,7 @@ void debug_readback_linelist(
 	labutils::Allocator     const& aAllocator,
 	VkQueue                         queue,
 	labutils::Buffer        const& gpuBuffer,
-	std::size_t                     sizeBytes,   // 总字节数
+	std::size_t                     sizeBytes,
 	std::string            const& label);
 
 void debug_readback_edge_counts(
@@ -125,5 +125,5 @@ void debug_readback_edge_counts(
 	labutils::Allocator     const& aAllocator,
 	VkQueue                         queue,
 	labutils::Buffer        const& gpuBuffer,
-	std::size_t                     sizeBytes,   // 元素总字节数
+	std::size_t                     sizeBytes,
 	std::string            const& label);

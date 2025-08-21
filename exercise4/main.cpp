@@ -64,7 +64,7 @@ namespace
 
 
 #		undef SHADERDIR_
-		constexpr char const* modelPath = MODELDIR_ "/models/bunny/scene.gltf";
+		constexpr char const* modelPath = MODELDIR_ "/models/icosahedron/scene.gltf";
 		constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
 
@@ -282,17 +282,17 @@ namespace
 
 int main() try
 {
-	//labutils::GltfModel model;
-	//if (model.loadFromFile(cfg::modelPath))
-	//{
-	//	std::cout << "load successfully!" << std::endl;
-	//}
-	//else
-	//{
-	//	std::cout << "load failed!" << std::endl;
-	//}
 	labutils::GltfModel model;
-	model.load_unit_gemometry();
+	if (model.loadFromFile(cfg::modelPath))
+	{
+		std::cout << "load successfully!" << std::endl;
+	}
+	else
+	{
+		std::cout << "load failed!" << std::endl;
+	}
+	//labutils::GltfModel model;
+	//model.load_unit_gemometry();
 
 	// Create Vulkan Window
 	auto window = lut::make_vulkan_window();
@@ -573,33 +573,106 @@ int main() try
 		{
 			vkDeviceWaitIdle(window.device);
 
+			// Timer
+			auto startTime = std::chrono::high_resolution_clock::now();
+			// Data
+			size_t verticesBefore = model.m_quadVertices.size();
+			size_t facesBefore = model.m_quadFaces.size();
+			size_t edgesBefore = model.m_edgeList.size();
+
 			if (model.subTime == 0)
 			{
+				// CPU
+				auto cpuStart = std::chrono::high_resolution_clock::now();
 				model.firstSubdivision();
 				model.subTime++;
+				auto cpuEnd = std::chrono::high_resolution_clock::now();
+				double cpuTime = std::chrono::duration<double, std::milli>(cpuEnd - cpuStart).count();
 
 
+				auto gpuStart = std::chrono::high_resolution_clock::now();
 				subMeshes[next] = create_model_buffer(window, allocator, model);
 				subMeshes[curr] = create_empty_buffer(window, allocator,
 					model.m_quadVertices.size(),
 					model.m_edgeList.size(),
 					model.m_quadFaces.size());
+				vkDeviceWaitIdle(window.device);
+				auto gpuEnd = std::chrono::high_resolution_clock::now();
+				double gpuTime = std::chrono::duration<double, std::milli>(gpuEnd - gpuStart).count();
 
 				std::swap(curr, next);
-				std::cout << "subdivision first time on CPU!\n";
+
+
+				size_t vertexMemory = model.m_quadVertices.size() * sizeof(lut::Vertex);
+				size_t indexMemory = model.m_quadIndices.size() * sizeof(uint32_t);
+				size_t edgeMemory = model.m_quadLinelists.size() * sizeof(uint32_t);
+				size_t totalMemoryMB = (vertexMemory + indexMemory + edgeMemory);
+				std::cout << "\n========== Subdivision Level " << model.subTime << " ==========\n";
+				std::cout << std::fixed << std::setprecision(2);
+				std::cout << "CPU Subdivision Time: " << cpuTime << " ms\n";
+				std::cout << "GPU Buffer Creation:  " << gpuTime << " ms\n";
+				std::cout << "Total Time:          " << (cpuTime + gpuTime) << " ms\n";
+				std::cout << "------- Mesh Statistics -------\n";
+				std::cout << "Vertices: " << verticesBefore << " -> " << model.m_quadVertices.size()
+					 << "\n";
+				std::cout << "Faces:    " << facesBefore << " -> " << model.m_quadFaces.size()
+					<< "\n";
+				std::cout << "Edges:    " << edgesBefore << " -> " << model.m_edgeList.size()
+					<< "\n";
+				std::cout << "------- Memory Usage -------\n";
+				std::cout << "Vertex Buffer:  " << vertexMemory / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "Index Buffer:   " << indexMemory / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "Edge Buffer:    " << edgeMemory / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "Total GPU Mem:  " << totalMemoryMB / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "=====================================\n\n";
 			}
 			else
 			{
+				
+				auto cpuStart = std::chrono::high_resolution_clock::now();
 				model.subdivideQuadOnce();
 				model.subTime++;
+				auto cpuEnd = std::chrono::high_resolution_clock::now();
+				double cpuTime = std::chrono::duration<double, std::milli>(cpuEnd - cpuStart).count();
 
+				
+				auto gpuStart = std::chrono::high_resolution_clock::now();
 				subMeshes[next] = create_model_buffer(window, allocator, model);
 				subMeshes[curr] = create_empty_buffer(window, allocator,
 					model.m_quadVertices.size(),
 					model.m_edgeList.size(),
 					model.m_quadFaces.size());
+				vkDeviceWaitIdle(window.device);
+				auto gpuEnd = std::chrono::high_resolution_clock::now();
+				double gpuTime = std::chrono::duration<double, std::milli>(gpuEnd - gpuStart).count();
 
 				std::swap(curr, next);
+
+				
+				size_t vertexMemory = model.m_quadVertices.size() * sizeof(lut::Vertex);
+				size_t indexMemory = model.m_quadIndices.size() * sizeof(uint32_t);
+				size_t edgeMemory = model.m_quadLinelists.size() * sizeof(uint32_t);
+				size_t totalMemoryMB = (vertexMemory + indexMemory + edgeMemory);
+
+				
+				std::cout << "\n========== Subdivision Level " << model.subTime << " ==========\n";
+				std::cout << std::fixed << std::setprecision(2);
+				std::cout << "CPU Subdivision Time: " << cpuTime << " ms\n";
+				std::cout << "GPU Buffer Creation:  " << gpuTime << " ms\n";
+				std::cout << "Total Time:          " << (cpuTime + gpuTime) << " ms\n";
+				std::cout << "------- Mesh Statistics -------\n";
+				std::cout << "Vertices: " << verticesBefore << " -> " << model.m_quadVertices.size()
+					<< " (x" << (float)model.m_quadVertices.size() / verticesBefore << ")\n";
+				std::cout << "Faces:    " << facesBefore << " -> " << model.m_quadFaces.size()
+					<< " (x" << (float)model.m_quadFaces.size() / facesBefore << ")\n";
+				std::cout << "Edges:    " << edgesBefore << " -> " << model.m_edgeList.size()
+					<< " (x" << (float)model.m_edgeList.size() / edgesBefore << ")\n";
+				std::cout << "------- Memory Usage -------\n";
+				std::cout << "Vertex Buffer:  " << vertexMemory / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "Index Buffer:   " << indexMemory / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "Edge Buffer:    " << edgeMemory / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "Total GPU Mem:  " << totalMemoryMB / (1024.0 * 1024.0) << " MB\n";
+				std::cout << "=====================================\n\n";
 			}
 
 			state.shouldSubdivision = 0;
@@ -2631,8 +2704,8 @@ namespace
 		// barrier2
 		VkBufferMemoryBarrier barrier2{};
 		barrier2.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-		barrier2.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;   // Face pass写
-		barrier2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;    // Edge pass读
+		barrier2.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;   // Face pass
+		barrier2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;    // Edge pass
 		barrier2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier2.buffer = inMesh.edgePoints.buffer;
@@ -2659,8 +2732,8 @@ namespace
 
 		// 3a. updatedVertices
 		barriers3.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-		barriers3.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;  // Vertex pass 写
-		barriers3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;   // Draw pass 读
+		barriers3.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;  // Vertex pass
+		barriers3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;   // Draw pass
 		barriers3.buffer = inMesh.updatedVertices.buffer;
 		barriers3.offset = 0;
 		barriers3.size = VK_WHOLE_SIZE;
@@ -3075,7 +3148,7 @@ namespace
 
 	void submit_compute_commands(lut::VulkanWindow const& aWindow, VkCommandBuffer cmdBuf)
 	{
-		// 1. 创建 fence，用于同步 GPU 完成信号
+		
 		VkFenceCreateInfo fenceInfo{};
 		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
@@ -3084,21 +3157,21 @@ namespace
 			throw std::runtime_error("Failed to create compute fence");
 		}
 
-		// 2. 设置提交信息
+		
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &cmdBuf;
 
-		// 3. 提交到 compute queue
+		
 		if (vkQueueSubmit(aWindow.presentQueue, 1, &submitInfo, fence) != VK_SUCCESS) {
 			throw std::runtime_error("Failed to submit compute commands");
 		}
 
-		// 4. 等待 GPU 执行完成（阻塞）
+		
 		vkWaitForFences(aWindow.device, 1, &fence, VK_TRUE, UINT64_MAX);
 
-		// 5. 清理 fence
+		
 		vkDestroyFence(aWindow.device, fence, nullptr);
 	}
 
